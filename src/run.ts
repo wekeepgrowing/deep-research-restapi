@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as readline from 'readline';
 
-import { deepResearch, writeActionPlan } from './deep-research';
+import { deepResearch, writeFinalReport } from './deep-research';
 import { generateNeededInfo } from './feedback';
 import { OutputManager } from './output-manager';
 
@@ -31,12 +31,10 @@ async function run() {
   // Get initial query
   const initialQuery = await askQuestion('어떤 프로젝트(업무)를 수행하고 싶으신가요? ');
 
-  // Get breath and depth parameters
+  // Get breadth and depth parameters
   const breadth =
     parseInt(
-      await askQuestion(
-        'Enter research breadth (recommended 2-10, default 4): ',
-      ),
+      await askQuestion('Enter research breadth (recommended 2-10, default 4): '),
       10,
     ) || 4;
   const depth =
@@ -56,11 +54,11 @@ async function run() {
   neededInfo.forEach(info => {
     console.log(`- ${info.detail} (이유: ${info.rationale})`);
   });
-  
+
   log('\nResearching your topic...');
 
   log('\nStarting research with progress tracking...\n');
-  
+
   const { learnings, visitedUrls } = await deepResearch({
     query: initialQuery,
     breadth,
@@ -71,23 +69,23 @@ async function run() {
   });
 
   log(`\n\nLearnings:\n\n${learnings.join('\n')}`);
-  log(
-    `\n\nVisited URLs (${visitedUrls.length}):\n\n${visitedUrls.join('\n')}`,
-  );
-  log('Writing action plan...');
+  log(`\n\nVisited URLs (${visitedUrls.length}):\n\n${visitedUrls.join('\n')}`);
 
-  const actionPlan = await writeActionPlan({
+  // ---- 최종 보고서 작성 부분 ----
+  log('\nWriting final report...');
+
+  const finalReport = await writeFinalReport({
     prompt: initialQuery,
-    actionableIdeas: learnings,
-    implementationConsiderations: [],
+    learnings,
     visitedUrls,
   });
 
-  // Save action plan to file
-  await fs.writeFile('action_plan.json', JSON.stringify(actionPlan, null, 2), 'utf-8');
+  // 최종 보고서 파일로 저장 (Markdown 형태)
+  await fs.writeFile('final_report.md', finalReport, 'utf-8');
 
-  console.log(`\n\nAction Plan:\n\n${JSON.stringify(actionPlan, null, 2)}`);
-  console.log('\nAction Plan has been saved to action_plan.json');
+  console.log(`\n\nFinal Report:\n\n${finalReport}`);
+  console.log('\nFinal Report has been saved to final_report.md');
+
   rl.close();
 }
 
