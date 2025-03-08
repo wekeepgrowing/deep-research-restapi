@@ -1,28 +1,33 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
-
 import { o3MiniModel } from './ai/providers';
 import { systemPrompt } from './prompt';
 
-export async function generateFeedback({
+export async function generateNeededInfo({
   query,
-  numQuestions = 3,
+  maxItems = 5,
 }: {
   query: string;
-  numQuestions?: number;
+  maxItems?: number;
 }) {
-  const userFeedback = await generateObject({
+  const result = await generateObject({
     model: o3MiniModel,
     system: systemPrompt(),
-    prompt: `Given the following query from the user, ask some follow up questions to clarify the research direction. Return a maximum of ${numQuestions} questions, but feel free to return less if the original query is clear: <query>${query}</query>`,
+    prompt: `
+      The user wants to perform or implement the following request:
+      <query>${query}</query>
+      Identify the top ${maxItems} pieces of information, resources, or details they need to gather
+      in order to accomplish this task. Provide a short explanation why each piece is important.
+    `,
     schema: z.object({
-      questions: z
-        .array(z.string())
-        .describe(
-          `Follow up questions to clarify the research direction, max of ${numQuestions}`,
-        ),
+      requiredInformation: z.array(
+        z.object({
+          detail: z.string(),
+          rationale: z.string(),
+        }),
+      ),
     }),
   });
 
-  return userFeedback.object.questions.slice(0, numQuestions);
+  return result.object.requiredInformation;
 }

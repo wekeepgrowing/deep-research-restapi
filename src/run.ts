@@ -1,8 +1,8 @@
 import * as fs from 'fs/promises';
 import * as readline from 'readline';
 
-import { deepResearch, writeFinalReport } from './deep-research';
-import { generateFeedback } from './feedback';
+import { deepResearch, writeActionPlan } from './deep-research';
+import { generateNeededInfo } from './feedback';
 import { OutputManager } from './output-manager';
 
 const output = new OutputManager();
@@ -29,7 +29,7 @@ function askQuestion(query: string): Promise<string> {
 // run the agent
 async function run() {
   // Get initial query
-  const initialQuery = await askQuestion('What would you like to research? ');
+  const initialQuery = await askQuestion('어떤 프로젝트(업무)를 수행하고 싶으신가요? ');
 
   // Get breath and depth parameters
   const breadth =
@@ -48,34 +48,21 @@ async function run() {
   log(`Creating research plan...`);
 
   // Generate follow-up questions
-  const followUpQuestions = await generateFeedback({
+  const neededInfo = await generateNeededInfo({
     query: initialQuery,
   });
 
-  log(
-    '\nTo better understand your research needs, please answer these follow-up questions:',
-  );
-
-  // Collect answers to follow-up questions
-  const answers: string[] = [];
-  for (const question of followUpQuestions) {
-    const answer = await askQuestion(`\n${question}\nYour answer: `);
-    answers.push(answer);
-  }
-
-  // Combine all information for deep research
-  const combinedQuery = `
-Initial Query: ${initialQuery}
-Follow-up Questions and Answers:
-${followUpQuestions.map((q: string, i: number) => `Q: ${q}\nA: ${answers[i]}`).join('\n')}
-`;
-
+  log(`\n이 업무를 수행하기 위해 필요한 핵심 정보:`);
+  neededInfo.forEach(info => {
+    console.log(`- ${info.detail} (이유: ${info.rationale})`);
+  });
+  
   log('\nResearching your topic...');
 
   log('\nStarting research with progress tracking...\n');
   
   const { learnings, visitedUrls } = await deepResearch({
-    query: combinedQuery,
+    query: initialQuery,
     breadth,
     depth,
     onProgress: (progress) => {
@@ -87,19 +74,20 @@ ${followUpQuestions.map((q: string, i: number) => `Q: ${q}\nA: ${answers[i]}`).j
   log(
     `\n\nVisited URLs (${visitedUrls.length}):\n\n${visitedUrls.join('\n')}`,
   );
-  log('Writing final report...');
+  log('Writing action plan...');
 
-  const report = await writeFinalReport({
-    prompt: combinedQuery,
-    learnings,
+  const actionPlan = await writeActionPlan({
+    prompt: initialQuery,
+    actionableIdeas: learnings,
+    implementationConsiderations: [],
     visitedUrls,
   });
 
-  // Save report to file
-  await fs.writeFile('output.md', report, 'utf-8');
+  // Save action plan to file
+  await fs.writeFile('action_plan.json', JSON.stringify(actionPlan, null, 2), 'utf-8');
 
-  console.log(`\n\nFinal Report:\n\n${report}`);
-  console.log('\nReport has been saved to output.md');
+  console.log(`\n\nAction Plan:\n\n${JSON.stringify(actionPlan, null, 2)}`);
+  console.log('\nAction Plan has been saved to action_plan.json');
   rl.close();
 }
 
