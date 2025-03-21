@@ -5,7 +5,12 @@ import { deepResearch, writeFinalReport } from './deep-research';
 import { generateNeededInfo } from './feedback';
 import { OutputManager } from './output-manager';
 
-const output = new OutputManager();
+// 타임스탬프가 포함된 로그 파일명 생성
+const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
+const logFileName = `research_log_${timestamp}.txt`;
+
+// OutputManager 초기화 시 로그 파일 경로 전달
+const output = new OutputManager(logFileName);
 
 // Helper function for consistent logging
 function log(...args: any[]) {
@@ -28,8 +33,12 @@ function askQuestion(query: string): Promise<string> {
 
 // run the agent
 async function run() {
+  log(`=== Deep Research Agent Started ===`);
+  log(`Log file: ${logFileName}`);
+  
   // Get initial query
   const initialQuery = await askQuestion('어떤 프로젝트(업무)를 수행하고 싶으신가요? ');
+  log(`Initial Query: ${initialQuery}`);
 
   // Get breadth and depth parameters
   const breadth =
@@ -42,18 +51,20 @@ async function run() {
       await askQuestion('Enter research depth (recommended 1-5, default 2): '),
       10,
     ) || 2;
+  
+  log(`Research Parameters: Breadth=${breadth}, Depth=${depth}`);
 
   log(`Creating research plan...`);
 
   // Generate follow-up questions
-  const neededInfo = await generateNeededInfo({
-    query: initialQuery,
-  });
+  // const neededInfo = await generateNeededInfo({
+  //   query: initialQuery,
+  // });
 
-  log(`\n이 업무를 수행하기 위해 필요한 핵심 정보:`);
-  neededInfo.forEach(info => {
-    console.log(`- ${info.detail} (이유: ${info.rationale})`);
-  });
+  // log(`\n이 업무를 수행하기 위해 필요한 핵심 정보:`);
+  // neededInfo.forEach(info => {
+  //   console.log(`- ${info.detail} (이유: ${info.rationale})`);
+  // });
 
   log('\nResearching your topic...');
 
@@ -81,10 +92,12 @@ async function run() {
   });
 
   // 최종 보고서 파일로 저장 (Markdown 형태)
-  await fs.writeFile('final_report.md', finalReport, 'utf-8');
+  const reportFileName = `final_report_${timestamp}.md`;
+  await fs.writeFile(reportFileName, finalReport, 'utf-8');
 
-  console.log(`\n\nFinal Report:\n\n${finalReport}`);
-  console.log('\nFinal Report has been saved to final_report.md');
+  log(`\n\nFinal Report has been saved to ${reportFileName}`);
+  log(`\n\nFinal Report:\n\n${finalReport}`);
+  log(`\n=== Deep Research Agent Completed ===`);
 
   rl.close();
 }

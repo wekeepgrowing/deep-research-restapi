@@ -33,7 +33,7 @@ type ResearchResult = {
 };
 
 // 늘리고 싶다면 여기서 API 동시 요청 제한을 조정하세요
-const ConcurrencyLimit = 2;
+const ConcurrencyLimit = 3;
 
 // Firecrawl 초기화
 const firecrawl = new FirecrawlApp({
@@ -243,6 +243,13 @@ export async function deepResearch({
   visitedUrls?: string[];
   onProgress?: (progress: ResearchProgress) => void;
 }): Promise<ResearchResult> {
+  // 시작 로그 추가
+  log(`=== Starting Deep Research ===`);
+  log(`Query: ${query}`);
+  log(`Parameters: Breadth=${breadth}, Depth=${depth}`);
+  log(`Initial Learnings: ${learnings.length}`);
+  log(`Initial Visited URLs: ${visitedUrls.length}`);
+  
   const progress: ResearchProgress = {
     currentDepth: depth,
     totalDepth: depth,
@@ -258,6 +265,7 @@ export async function deepResearch({
   };
 
   // 먼저 이 단계에서 검색할 쿼리들 생성
+  log(`Generating SERP queries...`);
   const serpQueries = await generateSerpQueries({
     query,
     learnings,
@@ -270,29 +278,36 @@ export async function deepResearch({
   });
 
   const limit = pLimit(ConcurrencyLimit);
+  log(`Starting parallel search with concurrency limit: ${ConcurrencyLimit}`);
 
   const results = await Promise.all(
     serpQueries.map(serpQuery =>
       limit(async () => {
         try {
+          log(`Processing query: "${serpQuery.query}" (Goal: ${serpQuery.researchGoal})`);
+          
           // Firecrawl로 검색 수행
+          log(`Running Firecrawl search...`);
           const result = await firecrawl.search(serpQuery.query, {
             timeout: 15000,
             limit: 5,
             scrapeOptions: { formats: ['markdown'] },
           });
           const newUrls = compact(result.data.map(item => item.url));
+          log(`Found ${result.data.length} results, ${newUrls.length} unique URLs`);
 
           // 검색 결과에서 핵심 learnings와 followUpQuestions 추출
+          log(`Processing search results...`);
           const newResults = await processSerpResult({
             query: serpQuery.query,
             result,
-            numLearnings: breadth,          // breadth만큼 뽑아보기
+            numLearnings: breadth,
             numFollowUpQuestions: breadth,
           });
 
           const accumulatedLearnings = [...learnings, ...newResults.learnings];
           const accumulatedUrls = [...visitedUrls, ...newUrls];
+          log(`Accumulated ${accumulatedLearnings.length} learnings, ${accumulatedUrls.length} URLs`);
 
           // depth가 남아있다면, followUpQuestions를 이용해 재귀적 조사
           const newDepth = depth - 1;
@@ -302,6 +317,7 @@ export async function deepResearch({
             log(
               `Researching deeper, breadth: ${newBreadth}, depth: ${newDepth}`,
             );
+            log(`Follow-up questions: ${JSON.stringify(newResults.followUpQuestions)}`);
 
             // followUpQuestions를 연결하여 다음 쿼리의 씨앗으로 사용
             const nextQuery = `
@@ -317,6 +333,7 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
               currentQuery: serpQuery.query,
             });
 
+            log(`Starting recursive research with new query: ${nextQuery.substring(0, 100)}...`);
             return deepResearch({
               query: nextQuery,
               breadth: newBreadth,
@@ -327,6 +344,7 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
             });
           } else {
             // 더 깊이 파고들 필요가 없으면, 여기서 반환
+            log(`Reached maximum depth or no follow-up questions. Returning results.`);
             reportProgress({
               currentDepth: 0,
               completedQueries: progress.completedQueries + 1,
@@ -353,10 +371,16 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
   );
 
   // 최종적으로 모든 결과에서 learnings와 url을 취합
-  return {
+  const finalResult = {
     learnings: [...new Set(results.flatMap(r => r.learnings))],
     visitedUrls: [...new Set(results.flatMap(r => r.visitedUrls))],
   };
+  
+  log(`=== Deep Research Completed ===`);
+  log(`Total Learnings: ${finalResult.learnings.length}`);
+  log(`Total Visited URLs: ${finalResult.visitedUrls.length}`);
+  
+  return finalResult;
 }
 
 export async function writeActionPlan({
