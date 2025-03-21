@@ -64,242 +64,274 @@ flowchart TB
     class MR output
     class NL,ND results
 ```
+# Deep-Research API 사용 및 프로젝트 구조 안내
 
-# Deep-Research Go 클라이언트 사용 가이드
+이 저장소는 **Deep-Research**라는 AI 기반 심층 연구(리서치) 수행 시스템의 Node.js API 서버 예시 구현체를 포함하고 있습니다. 검색 엔진, 웹 스크래핑(Firecrawl), 대규모 언어모델(LLM)을 결합하여 특정 주제에 대해 반복적이고 단계적인 리서치를 진행하고, 그 결과물을 마크다운 리포트, 로그, 액션플랜 등으로 산출합니다.
 
-이 저장소는 **Deep-Research** 시스템을 Go 코드에서 쉽게 연동하기 위한 예시 클라이언트(`deepresearch_client.go`)와 사용 예시(`example_usage.go`)를 제공합니다. Go 언어 기반의 애플리케이션에서 Deep-Research API를 호출하고, 연구(리서치) 작업을 생성 및 모니터링하며, 결과 리포트·로그·액션플랜을 손쉽게 다운로드할 수 있도록 구성되어 있습니다.
+본 문서는 이 코드베이스(deep-research)의 구조, 주요 파일 설명, 실행 방법 및 API 사용 방법을 안내합니다.
 
 ---
 
-## 개요
+## 주요 특징
 
-- **Deep-Research**는 검색(검색 엔진, 웹 스크래핑)과 LLM(Large Language Model)을 결합하여 특정 주제에 대해 단계적이고 심층적인 AI 리서치를 수행하는 시스템입니다.
-- 이 저장소에는 Node.js 기반으로 Deep-Research 에이전트를 실행하고(서버로 동작), 이후 Go 언어를 사용하는 클라이언트(`deepresearch_client.go`)로 해당 서버의 API를 호출하여 리서치 작업을 제어할 수 있는 예시가 포함되어 있습니다.
-- 예시 프로젝트 구조:
-  ```
-  larry1121-deep-research/
-  ├── README.md
-  ├── action_plan.json
-  ├── deepresearch_client.go      <-- Go 클라이언트 예시 (중요)
-  ├── docker-compose.yml
-  ├── Dockerfile
-  ├── example_usage.go            <-- Go 사용 예시
-  ├── final_report.md
-  ├── final_report_2025-03-21T04-24-16-187Z.md
-  ├── LICENSE
-  ├── package.json
-  ├── prettier.config.mjs
-  ├── report.md
-  ├── research_log_2025-03-21T04-24-16-187Z_2025-03-21T04-24-16.187Z.txt
-  ├── research_log_2025-03-21T04-24-16.183Z.txt
-  ├── tsconfig.json
-  ├── .nvmrc
-  ├── .prettierignore
-  └── src/
-      ├── api.ts
-      ├── deep-research.ts
-      ├── feedback.ts
-      ├── index.ts
-      ├── output-manager.ts
-      ├── progress-manager.ts
-      ├── prompt.ts
-      ├── run.ts
-      └── ai/
-          ├── providers.ts
-          ├── text-splitter.test.ts
-          └── text-splitter.ts
-  ```
+- **단계적(Auto/Iterative) 연구**: 사용자가 입력한 Query를 기반으로, 일정한 Breadth/Depth만큼 검색(웹스크래핑) + LLM 분석을 반복하여 주어진 주제에 대한 정보를 재귀적으로 수집하고 요약.
+- **결과물 자동 생성**: 
+  - 최종 마크다운 리포트(`.md`)  
+  - 연구 로그(`.txt`)  
+  - 액션 플랜(`.json`)  
+- **REST API**: Node.js(Express) 서버를 통해 REST 엔드포인트를 제공. 새로운 리서치 작업을 생성하고, 진행 상태를 폴링하며, 최종 산출물을 다운로드 가능.
+- **간단한 구조**: `<500 LoC`를 목표로 하여 코드를 쉽게 이해하고 확장할 수 있도록 구성.
+
+---
+
+## 프로젝트 구조
+
+```
+larry1121-deep-research/
+├── README.md
+├── action_plan.json
+├── docker-compose.yml
+├── Dockerfile
+├── LICENSE
+├── package.json
+├── prettier.config.mjs
+├── tsconfig.json
+├── .nvmrc
+├── .prettierignore
+└── src/
+    ├── api.ts                // 메인 Express API 엔드포인트
+    ├── deep-research.ts      // 재귀적 연구(딥서치) 로직
+    ├── feedback.ts           // 추가 정보(neededInfo) 생성용 로직
+    ├── index.ts              // runResearch() 등 최상위 함수
+    ├── output-manager.ts     // 로그/진행상황 출력 및 파일 관리
+    ├── progress-manager.ts   // (참고) 콘솔 Progress Bar 기능
+    ├── prompt.ts             // systemPrompt 등 프롬프트 템플릿
+    ├── run.ts                // CLI 인터페이스 (질문→응답)
+    └── ai/
+        ├── providers.ts      // OpenAI(LangChain) 등 모델/토큰 처리
+        ├── text-splitter.test.ts
+        └── text-splitter.ts  // 텍스트 스플릿 로직 (대용량 텍스트 분할)
+```
+
+> `final_report_*.md`, `research_log_*.txt`, `action_plan.json` 등은 실제 리서치를 실행했을 때 자동으로 생성된 산출 예시 파일입니다.
 
 ---
 
 ## 사전 준비
 
-### 1) Node.js 서버 실행 (Deep-Research API)
+### 1) 환경 변수 설정
 
-1. **저장소 클론 및 의존성 설치**
-   ```bash
-   git clone https://github.com/사용자명/larry1121-deep-research.git
-   cd larry1121-deep-research
-   npm install
-   ```
-2. **환경 변수 설정**  
-   `.env.local` 파일을 생성하여 Firecrawl, OpenAI 등 필요한 API 키를 기입합니다. 예:
+- `.env.local` 파일을 생성하여 아래와 같은 형식으로 API 키를 기입해야 합니다.
+- 예시:
 
-   ```bash
-   FIRECRAWL_KEY="your_firecrawl_key"
-   OPENAI_KEY="your_openai_key"
-   ```
+```bash
+FIRECRAWL_KEY="your_firecrawl_key"
+OPENAI_KEY="your_openai_key"
+OPENAI_ENDPOINT="https://api.openai.com/v1"   # (선택) 커스텀 엔드포인트
+```
 
-   - **Firecrawl**: 웹 검색/스크래핑 API
-   - **OpenAI**: LLM API (원한다면 자가 호스팅 모델도 가능)
+- **FIRECRAWL**: Firecrawl 웹 검색/스크래핑 API 키  
+- **OPENAI**: OpenAI API 키 (또는 자가 호스팅 LLM 환경에 맞춰 설정)
 
-3. **서버 실행**
+### 2) Node.js 버전
 
-   ```bash
-   # 로컬 환경에서 단순 실행
-   npm start
-
-   # 또는 Docker 컨테이너로 실행
-   docker compose up -d
-   # 컨테이너 셸에 접속 후 커맨드 수행
-   docker exec -it deep-research npm run docker
-   ```
-
-   서버가 정상 실행되면 기본적으로 `localhost:3000`에서 Deep-Research API가 동작하게 됩니다.
-
-### 2) Go 환경 구성
-
-- Go 버전은 `1.18` 이상(또는 `v22` 사용 등 `.nvmrc`와 무관하게, 로컬에 맞는 최신 Go 버전)을 권장합니다.
-- 본 예시에서는 외부 패키지 없이, 해당 저장소 내의 `deepresearch_client.go`와 `example_usage.go`를 그대로 활용합니다.
+- `.nvmrc`에 `v22`로 명시되어 있으므로, Node.js 22.x 버전을 권장합니다.
+- `npm install` 후, 필요 라이브러리가 모두 설치됩니다.
 
 ---
 
-## Go 클라이언트(`deepresearch_client.go`) 개요
+## 실행 방법
 
-- **`deepresearch_client.go`**:
+### 1) 로컬에서 직접 실행
 
-  - `ResearchClient` 구조체를 통해 Deep-Research API와 통신
-  - **주요 기능**:
-    - `StartResearch(options ResearchOptions)`: 새로운 리서치 작업 생성
-    - `GetJobStatus(jobID string)`: 작업 상태 조회
-    - `WaitForCompletion(jobID string, pollInterval, timeout)`: 작업 완료 대기
-    - `DownloadReport(jobID, outputPath)`: 최종 보고서(md 파일) 다운로드
-    - `DownloadLog(jobID, outputPath)`: 리서치 로그(txt 파일) 다운로드
-    - `DownloadActionPlan(jobID, outputPath)`: 액션플랜(json 파일) 다운로드
+```bash
+git clone https://github.com/larry1121-deep-research.git
+cd deep-research
+npm install
+npm start
+```
 
-- **`ResearchOptions` 구조체**로 리서치 설정:
-  - `Query` (필수): 리서치할 주제
-  - `Breadth` / `Depth`: 리서치의 폭과 깊이 (기본값 등 자유롭게 설정 가능)
-  - `OutputDir`, `LogFileName`, `ReportFileName`, `ActionPlanFileName` 등 파일명 세부 조정
+- 서버가 기본적으로 `localhost:3000` 포트에서 실행됩니다.
+- `npm start` 스크립트는 내부적으로 `tsx --env-file=.env.local src/run.ts`를 통해 리서치 CLI를 띄우게 됩니다.  
+- **API 서버**만 구동하고 싶다면: `npm run api` ( → `src/api.ts` )  
 
-```go
-type ResearchOptions struct {
-    Query              string `json:"query"`
-    Breadth            int    `json:"breadth,omitempty"`
-    Depth              int    `json:"depth,omitempty"`
-    OutputDir          string `json:"outputDir,omitempty"`
-    LogFileName        string `json:"logFileName,omitempty"`
-    ReportFileName     string `json:"reportFileName,omitempty"`
-    ActionPlanFileName string `json:"actionPlanFileName,omitempty"`
+### 2) Docker Compose로 실행
+
+- **Dockerfile** + **docker-compose.yml**를 통해 컨테이너화 가능
+
+```bash
+docker compose up -d
+# deep-research라는 이름의 컨테이너가 올라옴
+```
+
+- 이후 `docker logs -f deep-research` 등을 통해 로그를 확인할 수 있습니다.
+- 컨테이너 내부에서 `npm run docker` 커맨드로 서버가 실행되며, 3000번 포트에서 REST API를 제공합니다.
+
+---
+
+## 사용 예시 (REST API)
+
+### 1) 리서치 작업 생성 (POST `/api/research`)
+
+```bash
+POST /api/research
+Content-Type: application/json
+
+{
+  "query": "타로 카드 크라우드펀딩 성공시키기",
+  "breadth": 3,
+  "depth": 2
 }
+```
+
+- 응답 예시:
+
+```json
+{
+  "jobId": "123e4567-e89b-12d3-a456-426614174000",
+  "message": "Research job started",
+  "status": "pending"
+}
+```
+
+- `jobId`를 이용하여 이후 상태 조회, 결과 다운로드 가능.
+
+### 2) 진행 상태 조회 (GET `/api/research/:jobId`)
+
+```bash
+GET /api/research/123e4567-e89b-12d3-a456-426614174000
+```
+
+- 응답 예시(진행 중):
+
+```json
+{
+  "jobId": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "running",
+  "progress": {
+    "currentDepth": 1,
+    "totalDepth": 2,
+    "currentBreadth": 3,
+    "totalBreadth": 3,
+    "currentQuery": "AI SaaS fundraising and exit case studies success stories",
+    "totalQueries": 3,
+    "completedQueries": 1
+  },
+  "createdAt": "2025-03-21T04:24:42.757Z",
+  "updatedAt": "2025-03-21T04:25:18.354Z"
+}
+```
+
+- 응답 예시(완료 후):
+
+```json
+{
+  "jobId": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "completed",
+  "progress": {...},
+  "result": {
+    "learnings": [...],
+    "visitedUrls": [...],
+    "reportPath": "./results/123e4567.../final_report_...",
+    "logPath": "./results/123e4567.../research_log_...",
+    "actionPlanPath": "./results/123e4567.../action_plan_...",
+    "report": "...(string)...",
+    "actionPlan": {...}
+  }
+}
+```
+
+### 3) 최종 산출물 다운로드
+
+- 보고서(Markdown): `GET /api/research/:jobId/report`
+- 로그(Text): `GET /api/research/:jobId/log`
+- 액션플랜(JSON): `GET /api/research/:jobId/action-plan`
+
+```bash
+# 예: 보고서 다운로드
+curl -LO http://localhost:3000/api/research/123e4567-e89b-12d3-a456-426614174000/report
 ```
 
 ---
 
-## 사용 예시(`example_usage.go`)
+## 코드 구성 상세
 
-### 코드 개요
+### `src/api.ts`
 
-```go
-package main
+- Express 기반 REST API 서버
+- 주요 엔드포인트:
+  - `POST /api/research`: 연구 작업 생성
+  - `GET /api/research/:jobId`: 작업 상태 조회
+  - `GET /api/research/:jobId/report`: 최종 마크다운 보고서 다운로드
+  - `GET /api/research/:jobId/log`: 리서치 로그 파일 다운로드
+  - `GET /api/research/:jobId/action-plan`: 액션플랜(JSON) 다운로드
+- **작업 상태 관리(`jobs: Map<string, JobStatus>`)**:
+  - 상태: `pending` → `running` → `completed` (or `failed`)
+  - 작업 시작 시, 비동기로 `runResearch()`를 호출하고 진행 상황을 `progress`에 저장
 
-import (
-    "fmt"
-    "log"
-    "time"
+### `src/index.ts` & `src/run.ts`
 
-    "your-module/deepresearch"
-)
+- **`runResearch()`**: 딥리서치를 수행하는 메인 함수
+  - `deepResearch()` 호출 → 학습 결과(learnings, visitedUrls) 수집 → 최종 보고서·액션플랜 생성
+  - 결과물 파일(`final_report_*.md`, `action_plan_*.json`)을 지정된 경로에 저장
+- **`src/run.ts`**: CLI 인터페이스
+  - Node CLI로 프로젝트를 실행 시, 사용자에게 `Query`, `Breadth`, `Depth` 등을 입력받아 리서치를 진행
+  - 완료 후 `final_report_*.md`를 출력
 
-func main() {
-    // 1. 클라이언트 생성 (Deep-Research 서버 URL)
-    client := deepresearch.NewClient("http://localhost:3000")
+### `src/deep-research.ts`
 
-    // 2. 연구 작업 시작
-    jobID, err := client.StartResearch(deepresearch.ResearchOptions{
-        Query:   "AI SaaS 펀딩 받아서 팔기",
-        Breadth: 3,
-        Depth:   2,
-    })
-    if err != nil {
-        log.Fatalf("Failed to start research: %v", err)
-    }
-    fmt.Printf("Research job started with ID: %s\n", jobID)
+- **핵심 로직**: 재귀적(Recursive)으로 검색 및 LLM 분석을 수행
+- `deepResearch({ query, breadth, depth })` 프로세스:
+  1. `generateSerpQueries()`를 통해 주제(Query)를 세분화할 검색 쿼리들 생성
+  2. Firecrawl로 검색(동시성 제한 `ConcurrencyLimit=3`) 후, 마크다운 데이터 분석
+  3. LLM으로부터 `learnings`(학습 포인트)와 `followUpQuestions`(추가 조사 질문) 추출
+  4. Depth>0이면, `followUpQuestions`를 기반으로 재귀 호출(=더 깊은 조사)
+  5. 최종적으로 수집된 `learnings`와 `visitedUrls`를 리턴
+- **`writeFinalReport()`**, **`writeActionPlan()`**: 리서치 결과(learnings)를 종합하여 마크다운 보고서와 JSON 액션플랜을 작성
 
-    // 3. 작업 완료 대기 (최대 30분)
-    fmt.Println("Waiting for job completion...")
-    result, err := client.WaitForCompletion(jobID, 5*time.Second, 30*time.Minute)
-    if err != nil {
-        log.Fatalf("Error waiting for job: %v", err)
-    }
+### `src/output-manager.ts`
 
-    // 4. 결과 요약
-    fmt.Printf("Research completed with %d learnings and %d visited URLs\n",
-        len(result.Result.Learnings), len(result.Result.VisitedUrls))
+- 리서치 진행 상태(Progress)를 로그 파일에 남기고, 콘솔에도 표시하는 클래스
+- `log()` 메서드로 파일쓰기 + 콘솔출력
+- `updateProgress()`는 바 형태의 진행 상황을 로그에 기록
 
-    // 5. 보고서/로그/액션플랜 다운로드
-    if err := client.DownloadReport(jobID, "final_report.md"); err != nil {
-        log.Printf("Failed to download report: %v", err)
-    } else {
-        fmt.Println("Report downloaded to final_report.md")
-    }
+### `src/ai/`
 
-    if err := client.DownloadLog(jobID, "research_log.txt"); err != nil {
-        log.Printf("Failed to download log: %v", err)
-    } else {
-        fmt.Println("Log downloaded to research_log.txt")
-    }
-
-    if err := client.DownloadActionPlan(jobID, "action_plan.json"); err != nil {
-        log.Printf("Failed to download action plan: %v", err)
-    } else {
-        fmt.Println("Action plan downloaded to action_plan.json")
-    }
-}
-```
-
-1. `deepresearch.NewClient("http://localhost:3000")`
-   - Deep-Research 서버(예: Docker로 3000포트) 연결을 위한 클라이언트 생성
-2. `StartResearch(...)`
-   - **Query**와 **Breadth/Depth** 값을 지정해 리서치 시작
-   - 반환된 `jobID`를 통해 이후 상태 확인 가능
-3. `WaitForCompletion(jobID, 5*time.Second, 30*time.Minute)`
-   - 최대 30분 동안 진행 상황을 폴링하며 리서치 완료 여부 대기
-4. 결과(`JobResponse`)에서 **학습 포인트**(Learnings) 및 **방문 URL**(VisitedUrls) 활용
-5. 보고서, 로그, 액션 플랜(각각 `DownloadReport`, `DownloadLog`, `DownloadActionPlan`)을 로컬 파일로 다운로드
+- **`providers.ts`**: 
+  - OpenAI provider 설정, `o3MiniModel` 등 모델 래퍼
+  - 토큰 인코더(`js-tiktoken`)로 prompt 길이 검사, `trimPrompt()`로 초과분 제거
+- **`text-splitter.ts`**: 
+  - 대용량 텍스트를 chunk로 나누는 유틸 (재귀적 스플릿)
+  - LLM 컨텍스트 제한을 넘지 않도록 텍스트 분할
 
 ---
 
-## 주요 사용 흐름
+## 커스텀 및 확장 포인트
 
-1. **Deep-Research 서버 실행**: Node.js 혹은 Docker로 서버 실행
-2. **Go 클라이언트 코드 준비**: `deepresearch_client.go`와 `example_usage.go`를 프로젝트에 포함
-3. **`example_usage.go` 실행**
-   ```bash
-   go run example_usage.go
-   ```
-4. **연구 작업 확인**: 로그를 통해 `jobID` 확인 가능, 서버 쪽에서도 작업 상황 및 로그 확인 가능
-5. **결과 파일 확인**: `final_report.md`, `research_log.txt`, `action_plan.json` 등이 다운로드됨
+1. **LLM 변경**: 
+   - `src/ai/providers.ts`에서 OpenAI 모델(`o3MiniModel`)을 다른 API나 로컬 모델로 교체 가능.
+2. **검색 엔진 커스터마이징**: 
+   - Firecrawl 외에도 다른 검색/스크래핑 API를 연동하거나, 사내 DB/ES로 대체 가능.
+3. **에러 처리/재시도 로직**: 
+   - 현재는 단순히 `try/catch` 후 상태 `failed` 설정에 그치므로, 재시도나 타임아웃 전략을 추가 가능.
+4. **결과물 포맷**: 
+   - 보고서를 PDF 등 다른 형태로 변환하거나, 액션플랜을 외부 협업 툴로 자동 전송 가능.
+5. **서드파티 연동**: 
+   - 슬랙/이메일 알림, CI/CD 등과 연결하여 리서치 완료 시 알림 전송 등 확장 가능.
 
 ---
 
-## 추가 설정 & FAQ
+## 자주 묻는 질문 (FAQ)
 
-1. **리서치 폭(Breadth) & 깊이(Depth)**
-
-   - _Breadth_: 한 번에 생성할 검색 쿼리 개수
-   - _Depth_: 재귀적으로 조사할 단계 수
-   - 값이 높을수록 더 많은 결과를 가져오고 심층 검색하지만, 시간과 API 비용이 증가할 수 있습니다.
-
-2. **API 키 / 환경 변수**
-
-   - Node.js 서버를 구동하는 쪽에서 `.env.local`에 Firecrawl, OpenAI 등의 키를 지정합니다.
-   - Go 클라이언트는 별도의 API 키가 필요 없고, Deep-Research 서버 주소만 알면 됩니다.
-
-3. **동시성(Concurrency)**
-
-   - `deep-research.ts` 내부 코드를 보면 Firecrawl 검색 병렬 처리 개수가 `ConcurrencyLimit`(기본 3)으로 설정되어 있습니다.
-   - 무료 Firecrawl 사용 시, 너무 큰 값으로 설정하면 레이트 리밋에 걸릴 수 있으니 주의하세요.
-
-4. **Docker로 통합 운영**
-
-   - Go 애플리케이션을 별도 컨테이너로 구성해도 되며, 내부 네트워크 혹은 도커 컴포즈 네트워크를 통해 `deep-research` 컨테이너(포트 3000)에 요청을 보내면 됩니다.
-   - `docker compose up -d`로 Deep-Research를 띄워두고, 동일 네트워크에서 `deepresearch.NewClient("http://deep-research:3000")` 등으로 접근 가능.
-
-5. **사용 사례**
-   - **AI 기반 보고서 자동 생성**: 특정 주제(예: "AI SaaS 펀딩 받아서 팔기")에 대해 반복 심층 검색 후, 종합 보고서를 자동으로 받아봄.
-   - **R&D 자료조사**: 기술 자료·학술 논문 등 광범위한 검색 결과를 정리해 리포트 형태로 산출.
-   - **컨설팅 / 컨트랙팅 보조**: 컨설턴트가 특정 분야의 정보 수집을 자동화해, 빠르게 액션 플랜(action_plan.json) 초안을 얻을 수 있음.
+1. **Q: Breadth와 Depth는 무엇인가요?**  
+   - _Breadth_: 1회차 검색 시 병렬적으로 몇 개의 쿼리를 생성할지 결정  
+   - _Depth_: 검색 후 LLM 분석을 통해 추가 질문(followUpQuestions)이 생기면, 그만큼 더 깊이 반복할 단계 수
+2. **Q: Firecrawl 제한이나 요금 문제는 없나요?**  
+   - Firecrawl 무료 플랜 사용 시, 동시성이나 검색 횟수에 제한이 있습니다. 대량 검색 시 주의하세요.
+3. **Q: 클라이언트 측에서는 어떻게 API를 활용하나요?**  
+   - 본 저장소에 `api.ts`가 제공하는 REST 엔드포인트를 통해 POST로 리서치를 발행하고, GET으로 상태와 결과물을 수신하면 됩니다.  
+4. **Q: Node 대신 Docker만 사용해도 되나요?**  
+   - 네, `docker-compose.yml`로 Node 컨테이너를 띄울 수 있으며, 단 `.env.local` 등 환경 변수를 적절히 연결해야 합니다.
 
 ---
 
@@ -307,15 +339,14 @@ func main() {
 
 - [MIT License](./LICENSE)
 
-이 코드는 자유롭게 수정·활용할 수 있습니다.  
-Go 클라이언트( `deepresearch_client.go` )와 예시 코드( `example_usage.go` )를 참고하여 원하는 프로젝트에 맞게 확장하시기 바랍니다.
+본 프로젝트는 자유롭게 포크/수정/배포하실 수 있습니다.  
 
 ---
 
-### 문의 / 기여
+## 기여
 
-- 버그 리포트, 기능 요청, PR은 언제나 환영합니다.
-- 본 예시는 학습 및 시연을 위한 샘플 코드이며, 실제 운영 환경에서 사용할 경우에는 예외 처리, 오류 재시도, 보안 설정 등을 꼼꼼하게 확인해 주세요.
+- 버그, 제안 사항, PR은 언제나 환영합니다.  
+- 실제 프로젝트 운영 시에는 API rate limit, 에러처리, 보안(인증/인가) 등을 추가로 구현하시길 권장합니다.
 
-**감사합니다!**  
-Go 언어 기반 프로젝트에서 Deep-Research를 활용하는 과정을 즐겁게 진행하시길 바랍니다.
+감사합니다!  
+**Open Deep Research**와 함께 AI 기반 심층 리서치를 간편하게 수행해 보세요.
