@@ -9,14 +9,6 @@ import { o3MiniModel, trimPrompt } from './ai/providers';
 import { systemPrompt } from './prompt';
 import { OutputManager } from './output-manager';
 
-// Initialize output manager for coordinated console/progress output
-const output = new OutputManager();
-
-// Replace console.log with output.log
-function log(...args: any[]) {
-  output.log(...args);
-}
-
 export type ResearchProgress = {
   currentDepth: number;
   totalDepth: number;
@@ -97,12 +89,22 @@ export async function processSerpResult({
   result,
   numLearnings = 3,
   numFollowUpQuestions = 3,
+  output,
 }: {
   query: string;
   result: SearchResponse;
   numLearnings?: number;
   numFollowUpQuestions?: number;
+  output?: OutputManager;
 }) {
+  // OutputManager가 제공되지 않은 경우 임시로 생성
+  const localOutput = output || new OutputManager();
+  
+  // 로그 함수 정의
+  function log(...args: any[]) {
+    localOutput.log(...args);
+  }
+
   // 결과에서 markdown 콘텐츠만 추출하여 필요한 길이로 자름
   const contents = compact(result.data.map(item => item.markdown)).map(
     content => trimPrompt(content, 25_000),
@@ -235,6 +237,7 @@ export async function deepResearch({
   learnings = [],
   visitedUrls = [],
   onProgress,
+  output,
 }: {
   query: string;
   breadth: number;
@@ -242,7 +245,16 @@ export async function deepResearch({
   learnings?: string[];
   visitedUrls?: string[];
   onProgress?: (progress: ResearchProgress) => void;
+  output?: OutputManager;
 }): Promise<ResearchResult> {
+  // OutputManager가 제공되지 않은 경우 임시로 생성
+  const localOutput = output || new OutputManager();
+  
+  // 로그 함수 정의
+  function log(...args: any[]) {
+    localOutput.log(...args);
+  }
+  
   // 시작 로그 추가
   log(`=== Starting Deep Research ===`);
   log(`Query: ${query}`);
@@ -262,6 +274,7 @@ export async function deepResearch({
   const reportProgress = (update: Partial<ResearchProgress>) => {
     Object.assign(progress, update);
     onProgress?.(progress);
+    localOutput.updateProgress(progress);
   };
 
   // 먼저 이 단계에서 검색할 쿼리들 생성
@@ -303,6 +316,7 @@ export async function deepResearch({
             result,
             numLearnings: breadth,
             numFollowUpQuestions: breadth,
+            output: localOutput,
           });
 
           const accumulatedLearnings = [...learnings, ...newResults.learnings];
@@ -341,6 +355,7 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
               learnings: accumulatedLearnings,
               visitedUrls: accumulatedUrls,
               onProgress,
+              output: localOutput,
             });
           } else {
             // 더 깊이 파고들 필요가 없으면, 여기서 반환

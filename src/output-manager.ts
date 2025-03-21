@@ -7,30 +7,33 @@ export class OutputManager {
   private progressArea: string[] = [];
   private initialized: boolean = false;
   private logFilePath: string;
+  private silent: boolean = false;
   
-  constructor(logFilePath: string = 'research_log.txt') {
-    // Initialize terminal
-    process.stdout.write('\n'.repeat(this.progressLines));
-    this.initialized = true;
-    
-    // 로그 파일 경로 설정
+  constructor(logFilePath: string = 'research_log.txt', silent: boolean = false) {
     this.logFilePath = logFilePath;
+    this.silent = silent;
+    
+    // 터미널 초기화 (silent 모드가 아닐 때만)
+    if (!silent) {
+      process.stdout.write('\n'.repeat(this.progressLines));
+      this.initialized = true;
+    }
     
     // 로그 파일 초기화
-    const timestamp = new Date().toISOString().replace(/:/g, '-');
-    this.logFilePath = `${path.basename(logFilePath, path.extname(logFilePath))}_${timestamp}${path.extname(logFilePath)}`;
-    
-    // 로그 파일 헤더 작성
+    const timestamp = new Date().toISOString();
     fs.writeFileSync(this.logFilePath, `=== Deep Research Log - Started at ${timestamp} ===\n\n`);
   }
   
   log(...args: any[]) {
-    // 콘솔에 출력
+    // 메시지 생성
     const message = args.map(arg => 
       typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
     ).join(' ');
     
-    console.log(message);
+    // silent 모드가 아닐 때만 콘솔에 출력
+    if (!this.silent) {
+      console.log(message);
+    }
     
     // 로그 파일에 저장
     const timestamp = new Date().toISOString();
@@ -49,7 +52,10 @@ export class OutputManager {
     const progressLog = `--- Progress Update ---\n${this.progressArea.join('\n')}\n`;
     fs.appendFileSync(this.logFilePath, progressLog);
     
-    this.drawProgress();
+    // silent 모드가 아닐 때만 화면에 표시
+    if (!this.silent) {
+      this.drawProgress();
+    }
   }
   
   private getProgressBar(current: number, total: number, length: number = 20): string {
