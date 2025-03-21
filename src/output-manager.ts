@@ -13,6 +13,12 @@ export class OutputManager {
     this.logFilePath = logFilePath;
     this.silent = silent;
     
+    // 로그 파일 디렉토리 확인 및 생성
+    const logDir = path.dirname(logFilePath);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    
     // 터미널 초기화 (silent 모드가 아닐 때만)
     if (!silent) {
       process.stdout.write('\n'.repeat(this.progressLines));

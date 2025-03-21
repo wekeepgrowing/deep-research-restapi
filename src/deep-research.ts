@@ -9,6 +9,11 @@ import { o3MiniModel, trimPrompt } from './ai/providers';
 import { systemPrompt } from './prompt';
 import { OutputManager } from './output-manager';
 
+// 여기에 log 함수 정의 추가
+function log(...args: any[]) {
+  console.log(...args);
+}
+
 export type ResearchProgress = {
   currentDepth: number;
   totalDepth: number;

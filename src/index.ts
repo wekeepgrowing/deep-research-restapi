@@ -125,8 +125,8 @@ if (require.main === module) {
   // 명령줄 인자 파싱
   const args = process.argv.slice(2);
   const query = args[0];
-  const breadth = parseInt(args[1]) || 4;
-  const depth = parseInt(args[2]) || 2;
+  const breadth = parseInt(args[1] || '4');
+  const depth = parseInt(args[2] || '2');
   
   if (!query) {
     console.error('Usage: node index.js "your research query" [breadth=4] [depth=2]');

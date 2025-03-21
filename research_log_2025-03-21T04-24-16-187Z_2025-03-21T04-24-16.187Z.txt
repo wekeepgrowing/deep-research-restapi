@@ -13,7 +13,7 @@ Starting research with progress tracking...
 --- Progress Update ---
 Depth:    [░░░░░░░░░░░░░░░░░░░░] 0%
 Breadth:  [░░░░░░░░░░░░░░░░░░░░] 0%
-Queries:  [░░░░░░░░░░░░░░░░░░░░] 0%
+Que:  [░░░░░░ries░░░░░░░░░░░░░░] 0%
 Current:  Effective funding strategies and frameworks for AI SaaS startups
 --- Progress Update ---
 Depth:    [██████████░░░░░░░░░░] 50%
