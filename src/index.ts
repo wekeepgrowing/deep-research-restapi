@@ -1,5 +1,5 @@
 /**
- * Main entry point for Deep Research
+ * Main entry point for Deep Research API
  *
  * Exports core functionality and initializes telemetry
  */
@@ -27,9 +27,8 @@ export {
   JobStatus
 } from './interfaces';
 
-// Export API and CLI functionality
+// Export API functionality
 export { startServer } from './api';
-export { run } from './cli';
 
 // Log telemetry status on import
 if (telemetry.isEnabled) {

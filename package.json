@@ -5,9 +5,9 @@
   "scripts": {
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "build": "tsc",
-    "start": "tsx --env-file=.env.local src/cli/index.ts",
+    "start": "tsx --env-file=.env.local src/api/index.ts",
     "api": "tsx --env-file=.env.local src/api/index.ts",
-    "docker": "tsx src/cli/index.ts",
+    "docker": "tsx src/api/index.ts",
     "test": "node --test src/**/*.test.ts",
     "dev": "tsx watch --env-file=.env.local src/api/index.ts"
   },

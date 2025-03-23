@@ -1,11 +1,8 @@
-import { ResearchProgress } from './deep-research';
+import { ResearchProgress } from './interfaces';
 import * as fs from 'fs';
 import * as path from 'path';
 
 export class OutputManager {
-  private progressLines: number = 4;
-  private progressArea: string[] = [];
-  private initialized: boolean = false;
   private logFilePath: string;
   private silent: boolean = false;
   
@@ -17,12 +14,6 @@ export class OutputManager {
     const logDir = path.dirname(logFilePath);
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
-    }
-    
-    // 터미널 초기화 (silent 모드가 아닐 때만)
-    if (!silent) {
-      process.stdout.write('\n'.repeat(this.progressLines));
-      this.initialized = true;
     }
     
     // 로그 파일 초기화
@@ -47,36 +38,20 @@ export class OutputManager {
   }
   
   updateProgress(progress: ResearchProgress) {
-    this.progressArea = [
-      `Depth:    [${this.getProgressBar(progress.totalDepth - progress.currentDepth, progress.totalDepth)}] ${Math.round((progress.totalDepth - progress.currentDepth) / progress.totalDepth * 100)}%`,
-      `Breadth:  [${this.getProgressBar(progress.totalBreadth - progress.currentBreadth, progress.totalBreadth)}] ${Math.round((progress.totalBreadth - progress.currentBreadth) / progress.totalBreadth * 100)}%`,
-      `Queries:  [${this.getProgressBar(progress.completedQueries, progress.totalQueries)}] ${Math.round(progress.completedQueries / progress.totalQueries * 100)}%`,
-      progress.currentQuery ? `Current:  ${progress.currentQuery}` : ''
-    ];
+    // 진행 상황 로그 파일에 저장
+    const progressInfo = [
+      `Depth: ${progress.totalDepth - progress.currentDepth}/${progress.totalDepth}`,
+      `Breadth: ${progress.totalBreadth - progress.currentBreadth}/${progress.totalBreadth}`,
+      `Queries: ${progress.completedQueries}/${progress.totalQueries}`,
+      progress.currentQuery ? `Current: ${JSON.stringify(progress.currentQuery)}` : ''
+    ].filter(Boolean).join(' | ');
     
-    // 진행 상황도 로그 파일에 저장
-    const progressLog = `--- Progress Update ---\n${this.progressArea.join('\n')}\n`;
+    const progressLog = `--- Progress Update: ${progressInfo} ---\n`;
     fs.appendFileSync(this.logFilePath, progressLog);
     
-    // silent 모드가 아닐 때만 화면에 표시
+    // silent 모드가 아닐 때만 콘솔에 출력
     if (!this.silent) {
-      this.drawProgress();
+      console.log(progressLog);
     }
-  }
-  
-  private getProgressBar(current: number, total: number, length: number = 20): string {
-    const filledLength = Math.round(length * current / total);
-    return '█'.repeat(filledLength) + '░'.repeat(length - filledLength);
-  }
-  
-  private drawProgress() {
-    if (!this.initialized) return;
-    
-    // 현재 커서 위치에서 위로 이동하여 진행 영역 업데이트
-    process.stdout.write(`\x1B[${this.progressLines}A`);
-    process.stdout.write('\x1B[0J');
-    
-    // 진행 상황 출력
-    process.stdout.write(this.progressArea.join('\n') + '\n');
   }
 }
