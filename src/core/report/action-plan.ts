@@ -7,7 +7,7 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 
-import { o3MiniModel, generateWithTelemetry, calculateTokenUsage } from '../../ai/provider';
+import { model, generateWithTelemetry, calculateTokenUsage } from '../../ai/provider';
 import { systemPrompt } from '../../prompt';
 import { ActionPlan } from '../../interfaces';
 import { createGeneration, completeGeneration, telemetry } from '../../ai/telemetry';
@@ -37,7 +37,7 @@ export async function writeActionPlan({
   // Format ideas and considerations for the prompt
   const ideasString = actionableIdeas.map(idea => `<idea>\n${idea}\n</idea>`).join('\n');
   const considerationsString = implementationConsiderations.map(ic => `<consideration>\n${ic}\n</consideration>`).join('\n');
-  
+
   // Prepare the prompt text
   const promptText = `Given the following prompt and research learnings, create a detailed action plan. The action plan should provide actionable steps, outline implementation considerations, and list the sources of research.
 
@@ -74,7 +74,7 @@ ${considerationsString}
 
   // Generate action plan using AI
   const aiParams = await generateWithTelemetry({
-    model: o3MiniModel,
+    model: model,
     system: systemPrompt(),
     prompt: promptText,
     schema: z.object({
@@ -96,13 +96,13 @@ ${considerationsString}
   });
 
   const result = await generateObject(aiParams);
-  
+
   // Add sources to the action plan
   const actionPlan = {
     ...result.object.actionPlan,
     sources: visitedUrls
   };
-  
+
   // Complete the generation with token usage information if available
   if (generation) {
     const tokenUsage = calculateTokenUsage(promptText, actionPlan);

@@ -23,7 +23,7 @@ export const openai = createOpenAI({
 } as CustomOpenAIProviderSettings);
 
 // Create model instances with proper telemetry configuration
-export const o3MiniModel = openai(config.openai.model, {
+export const model = openai(config.openai.model, {
   reasoningEffort: config.openai.model.startsWith('o') ? 'medium' : undefined,
   structuredOutputs: true,
 });
@@ -73,7 +73,7 @@ export function trimPrompt(
   // Use the TextSplitter to intelligently split text
   // We'll import this dynamically to avoid circular references
   const { RecursiveCharacterTextSplitter } = require('./text');
-  
+
   const splitter = new RecursiveCharacterTextSplitter({
     chunkSize,
     chunkOverlap: 0,
@@ -105,7 +105,7 @@ export function extractTokenUsage(result: any) {
       totalTokens: result.response.usage.total_tokens
     };
   }
-  
+
   // 2. Try to find token usage in AI attributes
   if (result?.attributes) {
     // Look for ai.usage pattern first (main pattern)
@@ -116,7 +116,7 @@ export function extractTokenUsage(result: any) {
         totalTokens: result.attributes['ai.usage.promptTokens'] + result.attributes['ai.usage.completionTokens']
       };
     }
-    
+
     // Try gen_ai pattern as fallback
     if (result.attributes['gen_ai.usage.prompt_tokens'] && result.attributes['gen_ai.usage.completion_tokens']) {
       return {
@@ -126,11 +126,11 @@ export function extractTokenUsage(result: any) {
       };
     }
   }
-  
+
   // 3. Fall back to guessing if nothing else is available
   const fallbackPromptTokens = 0;
   const fallbackCompletionTokens = 0;
-  
+
   // If we have an object output, estimate tokens from its string representation
   if (result.object) {
     const outputText = JSON.stringify(result.object);
@@ -141,7 +141,7 @@ export function extractTokenUsage(result: any) {
       totalTokens: fallbackPromptTokens + estimatedCompletionTokens
     };
   }
-  
+
   // Last resort - return zeros
   return {
     promptTokens: fallbackPromptTokens,
@@ -152,7 +152,7 @@ export function extractTokenUsage(result: any) {
 
 /**
  * Calculate token usage for input and output
- * 
+ *
  * @param prompt Input prompt text
  * @param output Output text
  * @returns Token usage information
@@ -163,7 +163,7 @@ export function calculateTokenUsage(prompt: string, output: any) {
   const promptTokens = countTokens(typeof prompt === 'string' ? prompt : JSON.stringify(prompt));
   const outputText = typeof output === 'string' ? output : JSON.stringify(output);
   const completionTokens = countTokens(outputText);
-  
+
   return {
     promptTokens,
     completionTokens,
@@ -179,11 +179,11 @@ export function calculateTokenUsage(prompt: string, output: any) {
 export async function generateWithTelemetry(params: any) {
   // Extract trace info if available
   const { traceId, operationName, metadata, prompt, schema, parentSpanId, ...aiParams } = params;
-  
+
   // Calculate prompt token count for initial metadata
   const promptText = prompt || '';
   const promptTokenCount = countTokens(promptText);
-  
+
   // Get telemetry options if traceId is provided
   const telemetryOptions = getAITelemetryOptions(
     operationName || 'generate-text',
@@ -240,10 +240,10 @@ export async function generateWithTelemetry(params: any) {
           // Extract token usage from the OpenAI response
           // This information is collected by LangfuseExporter
           const tokenUsage = extractTokenUsage(result);
-          
+
           // Update Langfuse with result and token usage
           completeGeneration(generation, output, tokenUsage);
-          
+
           // Update trace with token usage information
           if (traceId && telemetry.isEnabled && telemetry.langfuse) {
             try {
@@ -254,10 +254,10 @@ export async function generateWithTelemetry(params: any) {
               } catch (fetchError) {
                 console.error(`Error fetching trace: ${fetchError}`);
               }
-              
+
               // Current total tokens in the trace
               const currentTotalTokens = traceData?.data?.metadata?.totalTokens || 0;
-              
+
               // Update trace with token usage
               telemetry.langfuse.trace({
                 id: traceId,
@@ -280,7 +280,7 @@ export async function generateWithTelemetry(params: any) {
               console.error(`Error updating trace with token usage: ${updateError}`);
             }
           }
-          
+
           // Log token usage for debugging
           if (config.server.isDevelopment) {
             console.log(`[Telemetry] Operation: ${operationName}, Token usage:`, tokenUsage);

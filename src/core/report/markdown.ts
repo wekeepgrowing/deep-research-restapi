@@ -7,7 +7,7 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 
-import { o3MiniModel, trimPrompt, generateWithTelemetry, calculateTokenUsage } from '../../ai/provider';
+import { model, trimPrompt, generateWithTelemetry, calculateTokenUsage } from '../../ai/provider';
 import { systemPrompt } from '../../prompt';
 import { createGeneration, completeGeneration, telemetry } from '../../ai/telemetry';
 import { config } from '../../config';
@@ -68,7 +68,7 @@ ${learningsString}
 
   // Generate report using AI
   const aiParams = await generateWithTelemetry({
-    model: o3MiniModel,
+    model: model,
     system: systemPrompt(),
     prompt: promptText,
     schema: z.object({
@@ -87,14 +87,14 @@ ${learningsString}
   });
 
   const result = await generateObject(aiParams);
-  
+
   // Add sources section with visited URLs
   const urlsSection = `\n\n## Sources\n\n${visitedUrls
     .map(url => `- ${url}`)
     .join('\n')}`;
 
   const finalReport = result.object.reportMarkdown + urlsSection;
-  
+
   // Complete the generation with token usage information if available
   if (generation) {
     const tokenUsage = calculateTokenUsage(promptText, finalReport);
@@ -159,7 +159,7 @@ ${learningsString}
 
   // Generate concise answer using AI
   const aiParams = await generateWithTelemetry({
-    model: o3MiniModel,
+    model: model,
     system: systemPrompt(),
     prompt: promptText,
     schema: z.object({
@@ -180,12 +180,12 @@ ${learningsString}
   });
 
   const result = await generateObject(aiParams);
-  
+
   // Complete the generation with token usage information if available
   if (generation) {
     const tokenUsage = calculateTokenUsage(promptText, result.object.exactAnswer);
     completeGeneration(generation, result.object.exactAnswer, tokenUsage);
   }
-  
+
   return result.object.exactAnswer;
 }

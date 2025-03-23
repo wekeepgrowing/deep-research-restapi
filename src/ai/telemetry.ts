@@ -13,6 +13,11 @@ import { Langfuse } from "langfuse";
 
 import { config } from '../config';
 
+// 활성 트레이스 추적을 위한 맵
+const activeTraces = new Map<string, boolean>();
+const activeSpans = new Map<string, boolean>();
+const activeGenerations = new Map<string, boolean>();
+
 /**
  * Initialize OpenTelemetry SDK with Langfuse exporter
  */
@@ -152,6 +157,13 @@ export class TraceManager {
     this.userId = userId;
     this.defaultModel = config.openai.model;
     
+    // 중복 트레이스 확인
+    if (!existingTraceId && activeTraces.has(this.traceId)) {
+      console.warn(`[Telemetry] Trace with ID ${this.traceId} already exists, reusing it`);
+    } else {
+      activeTraces.set(this.traceId, true);
+    }
+    
     // Only create root trace if we're not using an existing one
     if (!existingTraceId) {
       this.createRootTrace();
@@ -169,6 +181,8 @@ export class TraceManager {
     }
     
     try {
+      console.log(`[Telemetry] Creating root trace: ${this.traceId}, name: ${this.name}`);
+      
       telemetry.langfuse.trace({
         id: this.traceId,
         name: this.name,
@@ -218,7 +232,27 @@ export class TraceManager {
     }
     
     try {
-      const spanId = uuidv4();
+      const spanId = parentSpanId || uuidv4();
+      
+      // 이미 활성화된 span인지 확인
+      if (activeSpans.has(spanId)) {
+        console.log(`[Telemetry] Span ${spanId} already exists, updating it`);
+        
+        telemetry.langfuse.span({
+          id: spanId,
+          update: true,
+          metadata: {
+            ...metadata,
+            updatedAt: new Date().toISOString(),
+          }
+        });
+        
+        this.activeSpans.set(spanId, { name, isExisting: true });
+        return spanId;
+      }
+      
+      console.log(`[Telemetry] Creating new span: ${spanId}, name: ${name}, traceId: ${this.traceId}`);
+      
       const span = telemetry.langfuse.span({
         id: spanId,
         name,
@@ -230,6 +264,7 @@ export class TraceManager {
         }
       });
       
+      activeSpans.set(spanId, true);
       this.activeSpans.set(spanId, span);
       return spanId;
     } catch (error) {
@@ -265,19 +300,37 @@ export class TraceManager {
         return false;
       }
       
-      span.end({
-        output,
-        metadata: {
-          ...metadata,
-          endTime: new Date().toISOString(),
-        }
-      });
+      console.log(`[Telemetry] Ending span: ${spanId}`);
+      
+      if (span.isExisting) {
+        // 기존 span 업데이트
+        telemetry.langfuse.span({
+          id: spanId,
+          update: true,
+          metadata: {
+            ...metadata,
+            endTime: new Date().toISOString(),
+            output: output
+          }
+        });
+      } else {
+        // 일반 span 종료
+        span.end({
+          output,
+          metadata: {
+            ...metadata,
+            endTime: new Date().toISOString(),
+          }
+        });
+      }
       
       this.activeSpans.delete(spanId);
+      activeSpans.delete(spanId);
       return true;
     } catch (error) {
       console.error(`Failed to end span ${spanId}:`, error);
       this.activeSpans.delete(spanId);
+      activeSpans.delete(spanId);
       return false;
     }
   }
@@ -305,6 +358,9 @@ export class TraceManager {
     
     try {
       const genId = uuidv4();
+      
+      console.log(`[Telemetry] Creating generation: ${genId}, name: ${name}, parentSpan: ${spanId}`);
+      
       const generation = telemetry.langfuse.generation({
         id: genId,
         name,
@@ -319,6 +375,7 @@ export class TraceManager {
         }
       });
       
+      activeGenerations.set(genId, true);
       return genId;
     } catch (error) {
       console.error(`Failed to start generation "${name}":`, error);
@@ -346,6 +403,8 @@ export class TraceManager {
     }
     
     try {
+      console.log(`[Telemetry] Ending generation: ${generationId}`);
+      
       telemetry.langfuse.generation({
         id: generationId,
         update: true,
@@ -360,9 +419,11 @@ export class TraceManager {
       // Update root trace with token usage
       this.updateTraceTokenUsage(generationId, usage);
       
+      activeGenerations.delete(generationId);
       return true;
     } catch (error) {
       console.error(`Failed to end generation ${generationId}:`, error);
+      activeGenerations.delete(generationId);
       return false;
     }
   }
@@ -478,6 +539,8 @@ export class TraceManager {
     }
     
     try {
+      console.log(`[Telemetry] Finishing trace: ${this.traceId}, status: ${status}`);
+      
       telemetry.langfuse.trace({
         id: this.traceId,
         update: true,
@@ -489,8 +552,10 @@ export class TraceManager {
       });
       
       await telemetry.langfuse.flushAsync();
+      activeTraces.delete(this.traceId);
     } catch (error) {
       console.error(`Failed to finish trace: ${error}`);
+      activeTraces.delete(this.traceId);
     }
   }
 }
@@ -572,7 +637,17 @@ export const createGeneration = (
   }
 
   try {
+    const genId = uuidv4();
+    console.log(`[Telemetry] Creating generation: ${genId}, model: ${model}, parentSpan: ${parentObservationId}`);
+    
+    // 중복 generation 생성 방지
+    if (activeGenerations.has(genId)) {
+      console.warn(`[Telemetry] Generation with ID ${genId} already exists, skipping creation`);
+      return null;
+    }
+    
     const generation = telemetry.langfuse.generation({
+      id: genId,
       name: `${model}-generation`,
       traceId: traceId,
       model: model,
@@ -585,6 +660,7 @@ export const createGeneration = (
       },
     });
     
+    activeGenerations.set(genId, true);
     return generation;
   } catch (error) {
     console.error('Failed to create generation:', error);
@@ -605,6 +681,8 @@ export const completeGeneration = (
   }
 
   try {
+    console.log(`[Telemetry] Completing generation: ${generation.id}`);
+    
     generation.end({
       output: output,
       usage: {
@@ -614,9 +692,13 @@ export const completeGeneration = (
       },
     });
     
+    activeGenerations.delete(generation.id);
     return generation;
   } catch (error) {
     console.error('Failed to complete generation:', error);
+    if (generation && generation.id) {
+      activeGenerations.delete(generation.id);
+    }
     return null;
   }
 };
@@ -645,4 +727,9 @@ export const shutdownTelemetry = async () => {
       }
     }
   }
+  
+  // 트레이스, span, generation 맵 초기화
+  activeTraces.clear();
+  activeSpans.clear();
+  activeGenerations.clear();
 };
