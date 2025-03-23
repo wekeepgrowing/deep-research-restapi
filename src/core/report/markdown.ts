@@ -33,8 +33,7 @@ export async function writeFinalReport({
 }): Promise<string> {
   // Combine learnings into a string, trim if too long
   const learningsString = trimPrompt(
-    learnings.map(learning => `<learning>\n${learning}\n</learning>`).join('\n'),
-    150_000,
+    learnings.map(learning => `<learning>\n${learning}\n</learning>`).join('\n')
   );
 
   // Prepare the prompt text

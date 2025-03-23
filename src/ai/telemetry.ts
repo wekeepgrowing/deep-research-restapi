@@ -85,6 +85,40 @@ export const initializeTelemetry = () => {
 export const telemetry = initializeTelemetry();
 
 /**
+ * Extract token usage from telemetry spans if available
+ *
+ * @param spanData The span data from LangfuseExporter
+ * @returns Token usage information or undefined if not available
+ */
+export function extractTokenUsageFromSpan(spanData: any): { promptTokens: number; completionTokens: number; totalTokens: number } | undefined {
+  if (!spanData?.attributes) {
+    return undefined;
+  }
+  
+  const attrs = spanData.attributes;
+  
+  // Try to find token usage information in standard formats
+  if (attrs['ai.usage.promptTokens'] !== undefined && attrs['ai.usage.completionTokens'] !== undefined) {
+    return {
+      promptTokens: attrs['ai.usage.promptTokens'],
+      completionTokens: attrs['ai.usage.completionTokens'],
+      totalTokens: attrs['ai.usage.promptTokens'] + attrs['ai.usage.completionTokens']
+    };
+  }
+  
+  // Try gen_ai format
+  if (attrs['gen_ai.usage.prompt_tokens'] !== undefined && attrs['gen_ai.usage.completion_tokens'] !== undefined) {
+    return {
+      promptTokens: attrs['gen_ai.usage.prompt_tokens'],
+      completionTokens: attrs['gen_ai.usage.completion_tokens'],
+      totalTokens: attrs['gen_ai.usage.prompt_tokens'] + attrs['gen_ai.usage.completion_tokens']
+    };
+  }
+  
+  return undefined;
+}
+
+/**
  * TraceManager class for managing hierarchical traces and spans
  *
  * This class simplifies the process of creating and managing connected

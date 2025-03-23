@@ -352,8 +352,8 @@ router.post('/', async (req, res) => {
           });
           
           // Notify SSE clients of error
-          if (job.sseClients) {
-            for (const client of job.sseClients) {
+          if (jobStatus.sseClients) {
+            for (const client of jobStatus.sseClients) {
               client.write(`data: ${JSON.stringify({
                 type: 'error',
                 error: jobStatus.error,

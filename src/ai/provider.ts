@@ -91,13 +91,75 @@ export function trimPrompt(
 }
 
 /**
- * Calculate token usage for input and output
+ * Extract token usage from AI response
  *
+ * @param result The AI response
+ * @returns Token usage information
+ */
+export function extractTokenUsage(result: any) {
+  // 1. Check if there's direct usage information from the AI response
+  if (result?.response?.usage) {
+    return {
+      promptTokens: result.response.usage.prompt_tokens,
+      completionTokens: result.response.usage.completion_tokens,
+      totalTokens: result.response.usage.total_tokens
+    };
+  }
+  
+  // 2. Try to find token usage in AI attributes
+  if (result?.attributes) {
+    // Look for ai.usage pattern first (main pattern)
+    if (result.attributes['ai.usage.promptTokens'] && result.attributes['ai.usage.completionTokens']) {
+      return {
+        promptTokens: result.attributes['ai.usage.promptTokens'],
+        completionTokens: result.attributes['ai.usage.completionTokens'],
+        totalTokens: result.attributes['ai.usage.promptTokens'] + result.attributes['ai.usage.completionTokens']
+      };
+    }
+    
+    // Try gen_ai pattern as fallback
+    if (result.attributes['gen_ai.usage.prompt_tokens'] && result.attributes['gen_ai.usage.completion_tokens']) {
+      return {
+        promptTokens: result.attributes['gen_ai.usage.prompt_tokens'],
+        completionTokens: result.attributes['gen_ai.usage.completion_tokens'],
+        totalTokens: result.attributes['gen_ai.usage.prompt_tokens'] + result.attributes['gen_ai.usage.completion_tokens']
+      };
+    }
+  }
+  
+  // 3. Fall back to guessing if nothing else is available
+  const fallbackPromptTokens = 0;
+  const fallbackCompletionTokens = 0;
+  
+  // If we have an object output, estimate tokens from its string representation
+  if (result.object) {
+    const outputText = JSON.stringify(result.object);
+    const estimatedCompletionTokens = countTokens(outputText);
+    return {
+      promptTokens: fallbackPromptTokens,
+      completionTokens: estimatedCompletionTokens,
+      totalTokens: fallbackPromptTokens + estimatedCompletionTokens
+    };
+  }
+  
+  // Last resort - return zeros
+  return {
+    promptTokens: fallbackPromptTokens,
+    completionTokens: fallbackCompletionTokens,
+    totalTokens: fallbackPromptTokens + fallbackCompletionTokens
+  };
+}
+
+/**
+ * Calculate token usage for input and output
+ * 
  * @param prompt Input prompt text
  * @param output Output text
  * @returns Token usage information
  */
 export function calculateTokenUsage(prompt: string, output: any) {
+  // 이전 함수명을 유지하여 호환성을 제공
+  // 문자열 입력으로 수동 계산 필요 시 기존 로직 적용
   const promptTokens = countTokens(typeof prompt === 'string' ? prompt : JSON.stringify(prompt));
   const outputText = typeof output === 'string' ? output : JSON.stringify(output);
   const completionTokens = countTokens(outputText);
@@ -109,6 +171,7 @@ export function calculateTokenUsage(prompt: string, output: any) {
   };
 }
 
+
 /**
  * Generate text with integrated telemetry
  * This is a wrapper around the AI SDK's generateText with added telemetry
@@ -117,7 +180,7 @@ export async function generateWithTelemetry(params: any) {
   // Extract trace info if available
   const { traceId, operationName, metadata, prompt, schema, parentSpanId, ...aiParams } = params;
   
-  // Calculate prompt token count
+  // Calculate prompt token count for initial metadata
   const promptText = prompt || '';
   const promptTokenCount = countTokens(promptText);
   
@@ -130,7 +193,7 @@ export async function generateWithTelemetry(params: any) {
       promptTokens: promptTokenCount,
       modelId: aiParams.model?.modelName || config.openai.model,
       timestamp: new Date().toISOString(),
-      parentSpanId // 상위 span ID 포함
+      parentSpanId
     }
   );
 
@@ -145,7 +208,7 @@ export async function generateWithTelemetry(params: any) {
         promptTokens: promptTokenCount,
         ...metadata
       },
-      parentSpanId // 상위 span ID 전달
+      parentSpanId
     )
     : null;
 
@@ -174,8 +237,9 @@ export async function generateWithTelemetry(params: any) {
             output = result;
           }
 
-          // Calculate token usage
-          const tokenUsage = calculateTokenUsage(promptText, output);
+          // Extract token usage from the OpenAI response
+          // This information is collected by LangfuseExporter
+          const tokenUsage = extractTokenUsage(result);
           
           // Update Langfuse with result and token usage
           completeGeneration(generation, output, tokenUsage);
