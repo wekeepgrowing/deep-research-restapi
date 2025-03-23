@@ -1,3 +1,12 @@
+/**
+ * System prompts for LLM interactions
+ */
+
+/**
+ * Generate the standard system prompt for deep research
+ *
+ * @returns System prompt string
+ */
 export const systemPrompt = () => {
   const now = new Date().toISOString();
   return `You are an AI expert assistant designed to perform deep, iterative research specifically for business project planning and execution.
