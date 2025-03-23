@@ -25,12 +25,14 @@ export async function writeActionPlan({
   implementationConsiderations,
   visitedUrls,
   traceId,
+  parentSpanId,
 }: {
   prompt: string;
   actionableIdeas: string[];
   implementationConsiderations: string[];
   visitedUrls: string[];
   traceId?: string;
+  parentSpanId?: string;
 }): Promise<ActionPlan> {
   // Format ideas and considerations for the prompt
   const ideasString = actionableIdeas.map(idea => `<idea>\n${idea}\n</idea>`).join('\n');
@@ -65,7 +67,8 @@ ${considerationsString}
           promptLength: prompt.length,
           ideasCount: actionableIdeas.length,
           considerationsCount: implementationConsiderations.length
-        }
+        },
+        parentSpanId // 상위 span ID 전달
       )
     : null;
 
@@ -83,6 +86,7 @@ ${considerationsString}
     }),
     operationName: 'generate-action-plan',
     traceId,
+    parentSpanId, // 상위 span ID 전달
     metadata: {
       model: modelId, // Explicitly include model in metadata
       promptLength: prompt.length,
@@ -103,22 +107,6 @@ ${considerationsString}
   if (generation) {
     const tokenUsage = calculateTokenUsage(promptText, actionPlan);
     completeGeneration(generation, actionPlan, tokenUsage);
-    
-    // Update trace with action plan metadata
-    if (traceId && telemetry.isEnabled && telemetry.langfuse) {
-      telemetry.langfuse.trace({
-        id: traceId,
-        update: true,
-        metadata: {
-          actionPlanGenerated: true,
-          actionPlanModel: modelId,
-          actionPlanTokens: tokenUsage.totalTokens,
-          actionPlanSteps: actionPlan.steps.length,
-          actionPlanConsiderations: actionPlan.considerations.length,
-          actionPlanGeneratedAt: new Date().toISOString()
-        }
-      });
-    }
   }
 
   return actionPlan;

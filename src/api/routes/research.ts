@@ -69,7 +69,7 @@ router.post('/', async (req, res) => {
     // Generate job ID
     const jobId = uuidv4();
     
-    // Create trace manager for this job
+    // Create trace manager for this job - 이것이 루트 트레이스가 됨
     const { traceManager, traceId } = createResearchTraceManager(
       'api-research-job',
       {
@@ -126,14 +126,6 @@ router.post('/', async (req, res) => {
         traceManager.endSpan(setupSpanId, {
           status: 'success',
           outputDir
-        });
-        
-        // Start a span for the main research process
-        const researchSpanId = traceManager.startSpan('research-process', {
-          query: options.query,
-          breadth: options.breadth || config.research.defaultBreadth,
-          depth: options.depth || config.research.defaultDepth,
-          timestamp: new Date().toISOString()
         });
         
         // Custom OutputManager for SSE
@@ -209,12 +201,20 @@ router.post('/', async (req, res) => {
         const logPath = path.join(outputDir, `research_log_${jobId}.txt`);
         const output = new SSEOutputManager(logPath);
         
+        // Start research process span
+        const researchProcessSpanId = traceManager.startSpan('research-process', {
+          query: options.query,
+          breadth: options.breadth || config.research.defaultBreadth,
+          depth: options.depth || config.research.defaultDepth,
+          timestamp: new Date().toISOString()
+        });
+        
         // Run research with SSE output manager and progress tracking
         try {
           const result = await runResearch({
             ...options,
             outputDir,
-            traceId, // Pass the trace ID to connect everything
+            traceId, // 루트 트레이스 ID 전달
             debug: true, // Always enable debugging for API jobs
             onProgress: (progress) => {
               // Extract research goal
@@ -242,32 +242,18 @@ router.post('/', async (req, res) => {
             }
           });
           
-          // End research span
-          traceManager.endSpan(researchSpanId, {
+          // End research process span
+          traceManager.endSpan(researchProcessSpanId, {
             status: 'success',
             learningsCount: result.learnings.length,
             urlsCount: result.visitedUrls.length,
             completedAt: new Date().toISOString()
           });
           
-          // Start report generation span for final processing
-          const reportSpanId = traceManager.startSpan('report-generation', {
-            stage: 'final-output',
-            timestamp: new Date().toISOString()
-          });
-          
           // Update job status on completion
           jobStatus.status = 'completed';
           jobStatus.result = result;
           jobStatus.updatedAt = new Date();
-          
-          // End report span
-          traceManager.endSpan(reportSpanId, {
-            status: 'success',
-            reportPath: result.reportPath,
-            actionPlanPath: result.actionPlanPath,
-            completedAt: new Date().toISOString()
-          });
           
           // Complete the trace
           await traceManager.finishTrace('success', {
@@ -286,7 +272,7 @@ router.post('/', async (req, res) => {
           }
         } catch (error) {
           // End research span with error
-          traceManager.endSpan(researchSpanId, {
+          traceManager.endSpan(researchProcessSpanId, {
             status: 'error',
             error: error instanceof Error ? error.message : String(error),
             timestamp: new Date().toISOString()
@@ -366,8 +352,8 @@ router.post('/', async (req, res) => {
           });
           
           // Notify SSE clients of error
-          if (jobStatus.sseClients) {
-            for (const client of jobStatus.sseClients) {
+          if (job.sseClients) {
+            for (const client of job.sseClients) {
               client.write(`data: ${JSON.stringify({
                 type: 'error',
                 error: jobStatus.error,

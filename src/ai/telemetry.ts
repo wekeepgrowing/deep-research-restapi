@@ -104,20 +104,24 @@ export class TraceManager {
    * @param metadata Initial metadata for the trace
    * @param sessionId Optional session ID for the trace
    * @param userId Optional user ID for the trace
+   * @param existingTraceId Optional existing trace ID to use instead of creating a new one
    */
   constructor(
     private name: string,
     private metadata: Record<string, any> = {},
     sessionId?: string,
-    userId?: string
+    userId?: string,
+    existingTraceId?: string
   ) {
-    this.traceId = uuidv4();
+    this.traceId = existingTraceId || uuidv4();
     this.sessionId = sessionId;
     this.userId = userId;
     this.defaultModel = config.openai.model;
     
-    // Create root trace immediately
-    this.createRootTrace();
+    // Only create root trace if we're not using an existing one
+    if (!existingTraceId) {
+      this.createRootTrace();
+    }
   }
   
   /**
@@ -458,23 +462,28 @@ export class TraceManager {
 }
 
 /**
- * Create a new trace manager for a research session
+ * Create a research trace manager
  *
  * @param name Name of the trace
  * @param metadata Additional metadata for the trace
- * @returns Trace manager and trace ID
+ * @param sessionId Optional session ID
+ * @param userId Optional user ID
+ * @param parentTraceId Optional parent trace ID (if this should be a span instead of root trace)
+ * @returns Object containing the trace manager and trace ID
  */
 export const createResearchTraceManager = (
   name: string,
   metadata?: Record<string, any>,
   sessionId?: string,
-  userId?: string
+  userId?: string,
+  parentTraceId?: string
 ): { traceManager: TraceManager; traceId: string } => {
   const traceManager = new TraceManager(
     name,
     metadata,
     sessionId,
-    userId
+    userId,
+    parentTraceId
   );
   return {
     traceManager,
@@ -521,7 +530,8 @@ export const createGeneration = (
   traceId: string,
   model: string,
   prompt: string,
-  metadata?: Record<string, any>
+  metadata?: Record<string, any>,
+  parentObservationId?: string
 ) => {
   if (!telemetry.isEnabled || !telemetry.langfuse) {
     return null;
@@ -533,6 +543,7 @@ export const createGeneration = (
       traceId: traceId,
       model: model,
       input: { prompt },
+      parentObservationId: parentObservationId, // 상위 span ID 추가
       metadata: {
         ...metadata,
         modelId: model, // Ensure model ID is in metadata

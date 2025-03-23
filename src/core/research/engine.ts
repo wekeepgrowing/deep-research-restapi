@@ -21,7 +21,6 @@ import {
   SerpQuery,
   SearchProcessingResult
 } from '../../interfaces';
-import { createResearchTrace } from '../../ai/telemetry';
 
 // Initialize Firecrawl with API key from config
 const firecrawl = new FirecrawlApp({
@@ -39,12 +38,14 @@ export async function generateSerpQueries({
   query,
   numQueries = 3,
   learnings,
-  traceId
+  traceId,
+  parentSpanId
 }: {
   query: string;
   numQueries?: number;
   learnings?: string[];
   traceId?: string;
+  parentSpanId?: string;
 }): Promise<SerpQuery[]> {
   // Prepare prompt
   const promptText = `Given the following user prompt, generate a list of SERP queries to gather the practical or technical information needed to implement or complete the user's task. Return up to ${numQueries} queries, each focusing on a different aspect of the task: 1) Potential methods or frameworks 2) Example case studies 3) Common pitfalls or best practices.
@@ -71,7 +72,8 @@ ${
           numQueries,
           promptTokens: promptText.length,
           learningsCount: learnings?.length || 0
-        }
+        },
+        parentSpanId // 상위 span ID 전달
       )
     : null;
 
@@ -96,6 +98,7 @@ ${
     }),
     operationName: 'generate-serp-queries',
     traceId,
+    parentSpanId, // 상위 span ID 전달
     metadata: { query, numQueries, learningsCount: learnings?.length || 0 }
   });
 
@@ -123,7 +126,8 @@ export async function processSerpResult({
   numLearnings = 3,
   numFollowUpQuestions = 3,
   output,
-  traceId
+  traceId,
+  parentSpanId
 }: {
   query: string;
   result: SearchResponse;
@@ -131,6 +135,7 @@ export async function processSerpResult({
   numFollowUpQuestions?: number;
   output?: OutputManager;
   traceId?: string;
+  parentSpanId?: string;
 }): Promise<SearchProcessingResult> {
   // Create local output manager if not provided
   const localOutput = output || new OutputManager();
@@ -163,7 +168,8 @@ export async function processSerpResult({
           operation: 'process-serp-results',
           query,
           contentsCount: contents.length
-        }
+        },
+        parentSpanId // 상위 span ID 전달
       )
     : null;
 
@@ -185,6 +191,7 @@ export async function processSerpResult({
     }),
     operationName: 'process-serp-results',
     traceId,
+    parentSpanId, // 상위 span ID 전달
     metadata: { query, contentsCount: contents.length }
   });
 
@@ -217,6 +224,7 @@ export async function deepResearch({
   onProgress,
   output,
   traceId,
+  parentSpanId,
 }: {
   query: string;
   breadth: number;
@@ -226,6 +234,7 @@ export async function deepResearch({
   onProgress?: (progress: ResearchProgress) => void;
   output?: OutputManager;
   traceId?: string;
+  parentSpanId?: string;
 }): Promise<ResearchResult> {
   // Create local output manager if not provided
   const localOutput = output || new OutputManager();
@@ -284,6 +293,7 @@ export async function deepResearch({
     learnings,
     numQueries: breadth,
     traceId,
+    parentSpanId,
   });
 
   // Update progress with query information
@@ -303,23 +313,25 @@ export async function deepResearch({
         try {
           log(`Processing query: "${serpQuery.query}" (Goal: ${serpQuery.researchGoal})`);
           
-          // Create a sub-trace for this query if parent trace exists
-          let queryTraceId = undefined;
-          if (traceId && telemetry.isEnabled && telemetry.langfuse) {
+          // Create a query span if parent trace exists
+          let querySpanId = undefined;
+          if (traceId && telemetry.isEnabled && telemetry.langfuse && parentSpanId) {
             try {
-              const queryTrace = telemetry.langfuse.trace({
+              const querySpan = telemetry.langfuse.span({
                 name: `query-${serpQuery.query.substring(0, 30)}`,
-                parentTraceId: traceId,
+                traceId,
+                parentObservationId: parentSpanId,
                 metadata: {
                   query: serpQuery.query,
                   researchGoal: serpQuery.researchGoal,
                   depth: depth,
-                  breadth: breadth
+                  breadth: breadth,
+                  timestamp: new Date().toISOString()
                 }
               });
-              queryTraceId = queryTrace.id;
+              querySpanId = querySpan.id;
             } catch (error) {
-              log(`Error creating query sub-trace: ${error}`);
+              log(`Error creating query span: ${error}`);
             }
           }
           
@@ -333,10 +345,10 @@ export async function deepResearch({
           const newUrls = compact(result.data.map(item => item.url));
           log(`Found ${result.data.length} results, ${newUrls.length} unique URLs`);
 
-          // Update query trace with search results if available
-          if (queryTraceId && telemetry.isEnabled && telemetry.langfuse) {
-            telemetry.langfuse.trace({
-              id: queryTraceId,
+          // Update query span with search results if available
+          if (querySpanId && telemetry.isEnabled && telemetry.langfuse) {
+            telemetry.langfuse.span({
+              id: querySpanId,
               update: true,
               metadata: {
                 resultCount: result.data.length,
@@ -354,7 +366,8 @@ export async function deepResearch({
             numLearnings: breadth,
             numFollowUpQuestions: breadth,
             output: localOutput,
-            traceId: queryTraceId || traceId, // Use query trace if available
+            traceId,
+            parentSpanId: querySpanId || parentSpanId, // 쿼리 span ID 또는 상위 span ID 전달
           });
 
           // Accumulate learnings and URLs
@@ -388,18 +401,27 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
               currentQuery: serpQuery.query,
             });
 
-            // Complete query trace before starting recursive research
-            if (queryTraceId && telemetry.isEnabled && telemetry.langfuse) {
-              telemetry.langfuse.trace({
-                id: queryTraceId,
-                update: true,
-                status: 'success',
-                metadata: {
-                  learnings: newResults.learnings,
-                  followUpQuestions: newResults.followUpQuestions,
-                  nextQuery: nextQuery
-                }
-              });
+            // Create a recursive span for this deeper research
+            let recursiveSpanId = undefined;
+            if (traceId && telemetry.isEnabled && telemetry.langfuse && querySpanId) {
+              try {
+                const recursiveSpan = telemetry.langfuse.span({
+                  name: `recursive-research-depth-${newDepth}`,
+                  traceId,
+                  parentObservationId: querySpanId,
+                  metadata: {
+                    query: nextQuery,
+                    parentQuery: serpQuery.query,
+                    depth: newDepth,
+                    breadth: newBreadth,
+                    followUpQuestions: newResults.followUpQuestions,
+                    timestamp: new Date().toISOString()
+                  }
+                });
+                recursiveSpanId = recursiveSpan.id;
+              } catch (error) {
+                log(`Error creating recursive span: ${error}`);
+              }
             }
 
             // Recursively research with follow-up questions
@@ -413,6 +435,7 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
               onProgress,
               output: localOutput,
               traceId,
+              parentSpanId: recursiveSpanId || querySpanId || parentSpanId, // 재귀 span ID, 쿼리 span ID 또는 상위 span ID 전달
             });
           } else {
             // No more depth or questions, return accumulated results
@@ -423,16 +446,16 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
               currentQuery: serpQuery.query,
             });
             
-            // Complete query trace
-            if (queryTraceId && telemetry.isEnabled && telemetry.langfuse) {
-              telemetry.langfuse.trace({
-                id: queryTraceId,
+            // End query span
+            if (querySpanId && telemetry.isEnabled && telemetry.langfuse) {
+              telemetry.langfuse.span({
+                id: querySpanId,
                 update: true,
-                status: 'success',
                 metadata: {
                   learnings: newResults.learnings,
                   followUpQuestions: newResults.followUpQuestions,
-                  reachedMaxDepth: true
+                  reachedMaxDepth: true,
+                  completedAt: new Date().toISOString()
                 }
               });
             }
@@ -454,24 +477,29 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
           // Record error in trace if available
           if (traceId && telemetry.isEnabled && telemetry.langfuse) {
             try {
-              // Fetch current trace data to get existing errors
-              const traceData = await telemetry.langfuse.fetchTrace(traceId);
-              const existingErrors = traceData?.data?.metadata?.errors || [];
+              // Create error span
+              const errorSpanId = telemetry.langfuse.span({
+                name: `query-error-${serpQuery.query.substring(0, 20)}`,
+                traceId,
+                parentObservationId: parentSpanId,
+                metadata: {
+                  query: serpQuery.query,
+                  error: e.message || String(e),
+                  errorStack: e.stack,
+                  timestamp: new Date().toISOString()
+                }
+              }).id;
               
-              // Update trace with new error
-              telemetry.langfuse.trace({
-                id: traceId,
+              // End error span
+              telemetry.langfuse.span({
+                id: errorSpanId,
                 update: true,
                 metadata: {
-                  errors: [...existingErrors, {
-                    query: serpQuery.query,
-                    error: e.message || String(e),
-                    timestamp: new Date().toISOString()
-                  }]
+                  completedAt: new Date().toISOString()
                 }
               });
-            } catch (fetchError) {
-              log(`Error fetching/updating trace: ${fetchError}`);
+            } catch (spankError) {
+              log(`Error creating/updating error span: ${spankError}`);
             }
           }
           
@@ -496,20 +524,6 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
   log(`=== Deep Research Completed ===`);
   log(`Total Learnings: ${finalResult.learnings.length}`);
   log(`Total Visited URLs: ${finalResult.visitedUrls.length}`);
-  
-  // Update trace with final results
-  if (traceId && telemetry.isEnabled && telemetry.langfuse) {
-    telemetry.langfuse.trace({
-      id: traceId,
-      update: true,
-      status: 'success',
-      metadata: {
-        totalLearnings: finalResult.learnings.length,
-        totalVisitedUrls: finalResult.visitedUrls.length,
-        completedAt: new Date().toISOString()
-      }
-    });
-  }
   
   return finalResult;
 }

@@ -12,7 +12,7 @@ import { OutputManager } from '../utils/output-manager';
 import { ResearchOptions, ResearchResult, ResearchProgress, TraceError } from '../interfaces';
 import { deepResearch } from '../core/research/engine';
 import { writeFinalReport, writeActionPlan } from '../core/report';
-import { telemetry, createResearchTraceManager, TraceManager } from '../ai/telemetry';
+import { telemetry, TraceManager } from '../ai/telemetry';
 import { analyzeError } from '../utils/error-analyzer';
 
 /**
@@ -50,32 +50,20 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
   // Initialize output manager
   const output = new OutputManager(logPath);
   
-  // Create trace manager or use existing trace via traceId
-  let traceManager: TraceManager;
+  // Use existing trace ID
   let traceId = options.traceId;
-  
-  if (traceId && telemetry.isEnabled) {
-    // A trace ID was provided, create a manager for it
-    traceManager = new TraceManager('deep-research', {
-      query: options.query,
-      breadth,
-      depth,
-      outputDir,
-      debug: options.debug,
-      existingTraceId: true
-    });
-  } else {
-    // Create a new trace
-    const traceResult = createResearchTraceManager('deep-research', {
-      query: options.query,
-      breadth,
-      depth,
-      outputDir,
-      debug: options.debug
-    });
-    traceManager = traceResult.traceManager;
-    traceId = traceResult.traceId;
+  if (!traceId) {
+    console.warn('No traceId provided to runResearch. Telemetry tracking will be limited.');
   }
+  
+  // Create trace manager using existing trace
+  const traceManager = new TraceManager('research-process', {
+    query: options.query,
+    breadth,
+    depth,
+    outputDir,
+    debug: options.debug,
+  }, undefined, undefined, traceId);
   
   // Helper for consistent logging
   function log(...args: any[]) {
@@ -146,7 +134,8 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
         });
       },
       output,
-      traceId,
+      traceId, // 상위 트레이스 ID 전달
+      parentSpanId: researchSpanId, // 상위 span ID 전달
     });
     
     // End deep research span
@@ -173,6 +162,7 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
       learnings,
       visitedUrls,
       traceId,
+      parentSpanId: reportSpanId, // 상위 span ID 전달
     });
     
     // Save report to file
@@ -202,18 +192,6 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
       const actionableIdeas = learnings.slice(0, Math.min(learnings.length, 10));
       const implementationConsiderations = learnings.slice(Math.min(learnings.length, 10), Math.min(learnings.length, 15));
       
-      // Create generation for action plan
-      const actionPlanGenId = traceManager.startGeneration(
-        actionPlanSpanId,
-        'action-plan-generation',
-        config.openai.model, // Always specify the model to avoid undefined
-        options.query,
-        {
-          ideasCount: actionableIdeas.length,
-          considerationsCount: implementationConsiderations.length
-        }
-      );
-      
       // Generate action plan
       actionPlan = await writeActionPlan({
         prompt: options.query,
@@ -221,6 +199,7 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
         implementationConsiderations,
         visitedUrls,
         traceId,
+        parentSpanId: actionPlanSpanId, // 상위 span ID 전달
       });
       
       // Save action plan to file
@@ -254,15 +233,6 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
         log(`Action plan error analysis: ${JSON.stringify(errorInfo, null, 2)}`);
       }
     }
-    
-    // Finish trace successfully
-    await traceManager.finishTrace('success', {
-      learningsCount: learnings.length,
-      urlsCount: visitedUrls.length,
-      finalReportLength: finalReport.length,
-      actionPlanGenerated: !!actionPlan,
-      completedAt: new Date().toISOString()
-    });
     
     // Return complete result
     return {
@@ -343,14 +313,6 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
         timestamp: new Date().toISOString()
       });
     }
-    
-    // Finish trace with error
-    await traceManager.finishTrace('error', {
-      error: error instanceof Error ? error.message : String(error),
-      errorCategory: analyzedError?.category || 'unknown',
-      errorReportGenerated: !!errorReport,
-      failureTime: new Date().toISOString()
-    });
     
     // Throw enhanced error
     const enhancedError: any = new Error(`Research process failed: ${error.message || error}`);

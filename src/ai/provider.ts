@@ -115,7 +115,7 @@ export function calculateTokenUsage(prompt: string, output: any) {
  */
 export async function generateWithTelemetry(params: any) {
   // Extract trace info if available
-  const { traceId, operationName, metadata, prompt, schema, ...aiParams } = params;
+  const { traceId, operationName, metadata, prompt, schema, parentSpanId, ...aiParams } = params;
   
   // Calculate prompt token count
   const promptText = prompt || '';
@@ -130,6 +130,7 @@ export async function generateWithTelemetry(params: any) {
       promptTokens: promptTokenCount,
       modelId: aiParams.model?.modelName || config.openai.model,
       timestamp: new Date().toISOString(),
+      parentSpanId // 상위 span ID 포함
     }
   );
 
@@ -143,7 +144,8 @@ export async function generateWithTelemetry(params: any) {
         operationName,
         promptTokens: promptTokenCount,
         ...metadata
-      }
+      },
+      parentSpanId // 상위 span ID 전달
     )
     : null;
 

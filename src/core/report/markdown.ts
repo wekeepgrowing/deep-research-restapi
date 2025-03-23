@@ -23,11 +23,13 @@ export async function writeFinalReport({
   learnings,
   visitedUrls,
   traceId,
+  parentSpanId,
 }: {
   prompt: string;
   learnings: string[];
   visitedUrls: string[];
   traceId?: string;
+  parentSpanId?: string;
 }): Promise<string> {
   // Combine learnings into a string, trim if too long
   const learningsString = trimPrompt(
@@ -60,7 +62,8 @@ ${learningsString}
           model: modelId, // Duplicate to ensure it's available
           promptLength: prompt.length,
           learningsCount: learnings.length
-        }
+        },
+        parentSpanId // 상위 span ID 전달
       )
     : null;
 
@@ -76,6 +79,7 @@ ${learningsString}
     }),
     operationName: 'generate-final-report',
     traceId,
+    parentSpanId, // 상위 span ID 전달
     metadata: {
       model: modelId, // Explicitly include model in metadata
       promptLength: prompt.length,
@@ -96,21 +100,6 @@ ${learningsString}
   if (generation) {
     const tokenUsage = calculateTokenUsage(promptText, finalReport);
     completeGeneration(generation, finalReport, tokenUsage);
-    
-    // Update trace with report metadata
-    if (traceId && telemetry.isEnabled && telemetry.langfuse) {
-      telemetry.langfuse.trace({
-        id: traceId,
-        update: true,
-        metadata: {
-          reportGenerated: true,
-          reportModel: modelId,
-          reportTokens: tokenUsage.totalTokens,
-          reportLength: finalReport.length,
-          reportGeneratedAt: new Date().toISOString()
-        }
-      });
-    }
   }
 
   return finalReport;
@@ -126,10 +115,12 @@ export async function writeFinalAnswer({
   prompt,
   learnings,
   traceId,
+  parentSpanId,
 }: {
   prompt: string;
   learnings: string[];
   traceId?: string;
+  parentSpanId?: string;
 }): Promise<string> {
   // Combine learnings into a string, trim if too long
   const learningsString = trimPrompt(
@@ -162,7 +153,8 @@ ${learningsString}
           model: modelId, // Duplicate to ensure it's available
           promptLength: prompt.length,
           learningsCount: learnings.length
-        }
+        },
+        parentSpanId // 상위 span ID 전달
       )
     : null;
 
@@ -180,6 +172,7 @@ ${learningsString}
     }),
     operationName: 'generate-final-answer',
     traceId,
+    parentSpanId, // 상위 span ID 전달
     metadata: {
       model: modelId, // Explicitly include model in metadata
       promptLength: prompt.length,
@@ -193,21 +186,6 @@ ${learningsString}
   if (generation) {
     const tokenUsage = calculateTokenUsage(promptText, result.object.exactAnswer);
     completeGeneration(generation, result.object.exactAnswer, tokenUsage);
-    
-    // Update trace with answer metadata
-    if (traceId && telemetry.isEnabled && telemetry.langfuse) {
-      telemetry.langfuse.trace({
-        id: traceId,
-        update: true,
-        metadata: {
-          answerGenerated: true,
-          answerModel: modelId,
-          answerTokens: tokenUsage.totalTokens,
-          answerLength: result.object.exactAnswer.length,
-          answerGeneratedAt: new Date().toISOString()
-        }
-      });
-    }
   }
   
   return result.object.exactAnswer;
