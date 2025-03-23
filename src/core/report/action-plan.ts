@@ -11,26 +11,7 @@ import { o3MiniModel, generateWithTelemetry, calculateTokenUsage } from '../../a
 import { systemPrompt } from '../../prompt';
 import { ActionPlan } from '../../interfaces';
 import { createGeneration, completeGeneration, telemetry } from '../../ai/telemetry';
-
-/**
- * Get model name from trace or use default
- *
- * @param traceId Trace ID to fetch
- * @returns Model name or default model
- */
-async function getModelFromTrace(traceId: string): Promise<string> {
-  if (!telemetry.isEnabled || !telemetry.langfuse) {
-    return o3MiniModel.modelName;
-  }
-  
-  try {
-    const traceData = await telemetry.langfuse.fetchTrace(traceId);
-    return traceData?.data?.metadata?.modelId || o3MiniModel.modelName;
-  } catch (error) {
-    console.error(`Error fetching trace data: ${error}`);
-    return o3MiniModel.modelName;
-  }
-}
+import { config } from '../../config';
 
 /**
  * Generate an action plan from research learnings
@@ -69,17 +50,18 @@ ${considerationsString}
 </Implementation Considerations>
 `;
 
-  // Get model name from trace if available
-  const modelName = traceId ? await getModelFromTrace(traceId) : o3MiniModel.modelName;
+  // Use a specific model ID to ensure proper tracking
+  const modelId = config.openai.model;
 
   // Create specific generation for Langfuse tracing if enabled
   const generation = traceId && telemetry.isEnabled && telemetry.langfuse
     ? createGeneration(
         traceId,
-        modelName,
+        modelId, // Always use a specific model ID
         promptText,
         {
           operation: 'generate-action-plan',
+          model: modelId, // Duplicate to ensure it's available
           promptLength: prompt.length,
           ideasCount: actionableIdeas.length,
           considerationsCount: implementationConsiderations.length
@@ -102,6 +84,7 @@ ${considerationsString}
     operationName: 'generate-action-plan',
     traceId,
     metadata: {
+      model: modelId, // Explicitly include model in metadata
       promptLength: prompt.length,
       ideasCount: actionableIdeas.length,
       considerationsCount: implementationConsiderations.length
@@ -128,6 +111,7 @@ ${considerationsString}
         update: true,
         metadata: {
           actionPlanGenerated: true,
+          actionPlanModel: modelId,
           actionPlanTokens: tokenUsage.totalTokens,
           actionPlanSteps: actionPlan.steps.length,
           actionPlanConsiderations: actionPlan.considerations.length,

@@ -9,10 +9,11 @@ import * as path from 'path';
 
 import { config } from '../config';
 import { OutputManager } from '../utils/output-manager';
-import { ResearchOptions, ResearchResult, ResearchProgress } from '../interfaces';
+import { ResearchOptions, ResearchResult, ResearchProgress, TraceError } from '../interfaces';
 import { deepResearch } from '../core/research/engine';
 import { writeFinalReport, writeActionPlan } from '../core/report';
-import { createResearchTrace, telemetry } from '../ai/telemetry';
+import { telemetry, createResearchTraceManager, TraceManager } from '../ai/telemetry';
+import { analyzeError } from '../utils/error-analyzer';
 
 /**
  * Run a complete research operation from query to final reports
@@ -33,6 +34,7 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
   const logFileName = options.logFileName || `${config.paths.defaultLogFilename}_${timestamp}.txt`;
   const reportFileName = options.reportFileName || `${config.paths.defaultReportFilename}_${timestamp}.md`;
   const actionPlanFileName = options.actionPlanFileName || `${config.paths.defaultActionPlanFilename}_${timestamp}.json`;
+  const errorReportFileName = `error_report_${timestamp}.md`;
   
   // Ensure output directory exists
   if (!fs.existsSync(outputDir)) {
@@ -43,17 +45,37 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
   const logPath = path.join(outputDir, logFileName);
   const reportPath = path.join(outputDir, reportFileName);
   const actionPlanPath = path.join(outputDir, actionPlanFileName);
+  const errorReportPath = path.join(outputDir, errorReportFileName);
   
   // Initialize output manager
   const output = new OutputManager(logPath);
   
-  // Create research trace for telemetry if enabled
-  const { traceId, trace } = createResearchTrace('deep-research', {
-    query: options.query,
-    breadth,
-    depth,
-    outputDir
-  });
+  // Create trace manager or use existing trace via traceId
+  let traceManager: TraceManager;
+  let traceId = options.traceId;
+  
+  if (traceId && telemetry.isEnabled) {
+    // A trace ID was provided, create a manager for it
+    traceManager = new TraceManager('deep-research', {
+      query: options.query,
+      breadth,
+      depth,
+      outputDir,
+      debug: options.debug,
+      existingTraceId: true
+    });
+  } else {
+    // Create a new trace
+    const traceResult = createResearchTraceManager('deep-research', {
+      query: options.query,
+      breadth,
+      depth,
+      outputDir,
+      debug: options.debug
+    });
+    traceManager = traceResult.traceManager;
+    traceId = traceResult.traceId;
+  }
   
   // Helper for consistent logging
   function log(...args: any[]) {
@@ -67,19 +89,82 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
   if (telemetry.isEnabled) {
     log(`Telemetry: Enabled (Trace ID: ${traceId})`);
   }
+  if (options.debug) {
+    log(`Debug Mode: Enabled (Extended error reporting will be generated)`);
+  }
+  
+  // Start initialization span
+  const initSpanId = traceManager.startSpan('initialization', {
+    stage: 'setup',
+    query: options.query,
+    breadth,
+    depth,
+    timestamp: new Date().toISOString()
+  });
+  
+  // Track research progress for error context
+  const researchContext = {
+    query: options.query,
+    breadth,
+    depth,
+    startTime: new Date().toISOString(),
+    outputDir,
+    traceId
+  };
+  
+  // End initialization span
+  traceManager.endSpan(initSpanId, {
+    status: 'success',
+    logPath,
+    reportPath,
+    actionPlanPath
+  });
   
   try {
+    // Start deep research span
+    const researchSpanId = traceManager.startSpan('deep-research', {
+      stage: 'data-collection',
+      query: options.query,
+      breadth,
+      depth,
+      timestamp: new Date().toISOString()
+    });
+    
     // Perform deep research
     const { learnings, visitedUrls } = await deepResearch({
       query: options.query,
       breadth,
       depth,
-      onProgress: options.onProgress,
+      onProgress: (progress) => {
+        output.updateProgress(progress);
+        options.onProgress?.(progress);
+        
+        // Update trace with progress
+        traceManager.updateTraceMetadata({
+          currentProgress: progress,
+          timestamp: new Date().toISOString()
+        });
+      },
       output,
       traceId,
     });
     
+    // End deep research span
+    traceManager.endSpan(researchSpanId, {
+      status: 'success',
+      learningsCount: learnings.length,
+      urlsCount: visitedUrls.length,
+      completedAt: new Date().toISOString()
+    });
+    
     log(`\nResearch completed with ${learnings.length} learnings and ${visitedUrls.length} visited URLs`);
+    
+    // Start report generation span
+    const reportSpanId = traceManager.startSpan('report-generation', {
+      stage: 'synthesis',
+      learningsCount: learnings.length,
+      timestamp: new Date().toISOString()
+    });
     
     // Generate final report
     log('\nWriting final report...');
@@ -94,6 +179,21 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
     fs.writeFileSync(reportPath, finalReport, 'utf-8');
     log(`Final report saved to ${reportPath}`);
     
+    // End report generation span
+    traceManager.endSpan(reportSpanId, {
+      status: 'success',
+      reportLength: finalReport.length,
+      reportPath,
+      completedAt: new Date().toISOString()
+    });
+    
+    // Start action plan generation span
+    const actionPlanSpanId = traceManager.startSpan('action-plan-generation', {
+      stage: 'synthesis',
+      learningsCount: learnings.length,
+      timestamp: new Date().toISOString()
+    });
+    
     // Generate action plan
     let actionPlan;
     try {
@@ -101,6 +201,18 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
       // Split learnings into actionable ideas and implementation considerations
       const actionableIdeas = learnings.slice(0, Math.min(learnings.length, 10));
       const implementationConsiderations = learnings.slice(Math.min(learnings.length, 10), Math.min(learnings.length, 15));
+      
+      // Create generation for action plan
+      const actionPlanGenId = traceManager.startGeneration(
+        actionPlanSpanId,
+        'action-plan-generation',
+        config.openai.model, // Always specify the model to avoid undefined
+        options.query,
+        {
+          ideasCount: actionableIdeas.length,
+          considerationsCount: implementationConsiderations.length
+        }
+      );
       
       // Generate action plan
       actionPlan = await writeActionPlan({
@@ -114,9 +226,43 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
       // Save action plan to file
       fs.writeFileSync(actionPlanPath, JSON.stringify(actionPlan, null, 2), 'utf-8');
       log(`Action plan saved to ${actionPlanPath}`);
+      
+      // End action plan generation span
+      traceManager.endSpan(actionPlanSpanId, {
+        status: 'success',
+        stepsCount: actionPlan.steps.length,
+        considerationsCount: actionPlan.considerations.length,
+        actionPlanPath,
+        completedAt: new Date().toISOString()
+      });
     } catch (e) {
       log(`Error generating action plan: ${e}`);
+      
+      // End action plan generation span with error
+      traceManager.endSpan(actionPlanSpanId, {
+        status: 'error',
+        error: e instanceof Error ? e.message : String(e),
+        timestamp: new Date().toISOString()
+      });
+      
+      // Analyze error and log analysis
+      if (options.debug) {
+        const errorInfo = analyzeError(e, {
+          phase: 'action-plan-generation',
+          ...researchContext
+        });
+        log(`Action plan error analysis: ${JSON.stringify(errorInfo, null, 2)}`);
+      }
     }
+    
+    // Finish trace successfully
+    await traceManager.finishTrace('success', {
+      learningsCount: learnings.length,
+      urlsCount: visitedUrls.length,
+      finalReportLength: finalReport.length,
+      actionPlanGenerated: !!actionPlan,
+      completedAt: new Date().toISOString()
+    });
     
     // Return complete result
     return {
@@ -132,10 +278,116 @@ export async function runResearch(options: ResearchOptions): Promise<ResearchRes
   } catch (error) {
     log(`\n=== Error in Research Process ===`);
     log(error);
-    throw error;
-  } finally {
-    if (trace) {
-      trace.update({ status: 'completed' });
+    
+    // Start error analysis span
+    const errorSpanId = traceManager.startSpan('error-analysis', {
+      stage: 'error-handling',
+      errorType: error.constructor.name,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      timestamp: new Date().toISOString()
+    });
+    
+    // Enhance error with trace analysis
+    let analyzedError: TraceError | undefined;
+    let errorReport: string | undefined;
+    
+    if (options.debug) {
+      try {
+        // Update context with latest information
+        researchContext.endTime = new Date().toISOString();
+        researchContext.duration = `${(new Date().getTime() - new Date(researchContext.startTime).getTime()) / 1000}s`;
+        
+        // Analyze the error
+        log(`\nGenerating error trace analysis...`);
+        analyzedError = analyzeError(error, {
+          ...researchContext,
+          telemetryTraceId: traceId
+        });
+        
+        // Generate and save error report
+        const { createErrorReport } = require('../utils/error-analyzer');
+        errorReport = createErrorReport(analyzedError, researchContext);
+        fs.writeFileSync(errorReportPath, errorReport, 'utf-8');
+        log(`Detailed error report saved to ${errorReportPath}`);
+        
+        // Log recommendations
+        const { getErrorRecommendations } = require('../utils/error-analyzer');
+        const recommendations = getErrorRecommendations(analyzedError);
+        log(`\n=== Error Recovery Recommendations ===`);
+        recommendations.forEach((rec: string, i: number) => log(`${i+1}. ${rec}`));
+        
+        // End error analysis span
+        traceManager.endSpan(errorSpanId, {
+          status: 'success',
+          errorCategory: analyzedError.category,
+          suggestions: analyzedError.suggestions,
+          errorReportPath,
+          completedAt: new Date().toISOString()
+        });
+      } catch (analysisError) {
+        log(`\nError during error analysis: ${analysisError}`);
+        
+        // End error analysis span with error
+        traceManager.endSpan(errorSpanId, {
+          status: 'error',
+          error: analysisError instanceof Error ? analysisError.message : String(analysisError),
+          timestamp: new Date().toISOString()
+        });
+      }
+    } else {
+      // End error analysis span with minimal info
+      traceManager.endSpan(errorSpanId, {
+        status: 'skipped',
+        reason: 'debug_disabled',
+        error: error instanceof Error ? error.message : String(error),
+        timestamp: new Date().toISOString()
+      });
     }
+    
+    // Finish trace with error
+    await traceManager.finishTrace('error', {
+      error: error instanceof Error ? error.message : String(error),
+      errorCategory: analyzedError?.category || 'unknown',
+      errorReportGenerated: !!errorReport,
+      failureTime: new Date().toISOString()
+    });
+    
+    // Throw enhanced error
+    const enhancedError: any = new Error(`Research process failed: ${error.message || error}`);
+    enhancedError.originalError = error;
+    enhancedError.traceAnalysis = analyzedError;
+    enhancedError.errorReportPath = errorReport ? errorReportPath : undefined;
+    enhancedError.researchContext = researchContext;
+    throw enhancedError;
   }
+}
+
+/**
+ * Get detailed error analysis for a failed research job
+ *
+ * @param jobId ID of the failed job
+ * @param error Original error
+ * @param context Additional context information
+ * @returns Error analysis details
+ */
+export async function analyzeResearchError(
+  jobId: string,
+  error: any,
+  context: Record<string, any>
+): Promise<TraceError> {
+  const { analyzeError, getErrorRecommendations } = require('../utils/error-analyzer');
+  
+  // Create error analysis
+  const errorContext = {
+    jobId,
+    ...context
+  };
+  
+  const analyzed = analyzeError(error, errorContext);
+  
+  // Get specific recommendations
+  const recommendations = getErrorRecommendations(analyzed);
+  analyzed.suggestions = recommendations;
+  
+  return analyzed;
 }

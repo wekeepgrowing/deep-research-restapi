@@ -10,26 +10,7 @@ import { z } from 'zod';
 import { o3MiniModel, trimPrompt, generateWithTelemetry, calculateTokenUsage } from '../../ai/provider';
 import { systemPrompt } from '../../prompt';
 import { createGeneration, completeGeneration, telemetry } from '../../ai/telemetry';
-
-/**
- * Get model name from trace or use default
- *
- * @param traceId Trace ID to fetch
- * @returns Model name or default model
- */
-async function getModelFromTrace(traceId: string): Promise<string> {
-  if (!telemetry.isEnabled || !telemetry.langfuse) {
-    return o3MiniModel.modelName;
-  }
-  
-  try {
-    const traceData = await telemetry.langfuse.fetchTrace(traceId);
-    return traceData?.data?.metadata?.modelId || o3MiniModel.modelName;
-  } catch (error) {
-    console.error(`Error fetching trace data: ${error}`);
-    return o3MiniModel.modelName;
-  }
-}
+import { config } from '../../config';
 
 /**
  * Generate a final markdown report from research learnings
@@ -65,17 +46,18 @@ Here are all the learnings from previous research:
 ${learningsString}
 </learnings>`;
 
-  // Get model name from trace if available
-  const modelName = traceId ? await getModelFromTrace(traceId) : o3MiniModel.modelName;
+  // Use a specific model ID to ensure proper tracking
+  const modelId = config.openai.model;
 
   // Create specific generation for Langfuse tracing if enabled
   const generation = traceId && telemetry.isEnabled && telemetry.langfuse
     ? createGeneration(
         traceId,
-        modelName,
+        modelId, // Always use a specific model ID
         promptText,
         {
           operation: 'generate-final-report',
+          model: modelId, // Duplicate to ensure it's available
           promptLength: prompt.length,
           learningsCount: learnings.length
         }
@@ -94,7 +76,11 @@ ${learningsString}
     }),
     operationName: 'generate-final-report',
     traceId,
-    metadata: { promptLength: prompt.length, learningsCount: learnings.length }
+    metadata: {
+      model: modelId, // Explicitly include model in metadata
+      promptLength: prompt.length,
+      learningsCount: learnings.length
+    }
   });
 
   const result = await generateObject(aiParams);
@@ -118,6 +104,7 @@ ${learningsString}
         update: true,
         metadata: {
           reportGenerated: true,
+          reportModel: modelId,
           reportTokens: tokenUsage.totalTokens,
           reportLength: finalReport.length,
           reportGeneratedAt: new Date().toISOString()
@@ -161,17 +148,18 @@ Here are all the learnings from research on the topic that you can use to help a
 ${learningsString}
 </learnings>`;
 
-  // Get model name from trace if available
-  const modelName = traceId ? await getModelFromTrace(traceId) : o3MiniModel.modelName;
+  // Use a specific model ID to ensure proper tracking
+  const modelId = config.openai.model;
 
   // Create specific generation for Langfuse tracing if enabled
   const generation = traceId && telemetry.isEnabled && telemetry.langfuse
     ? createGeneration(
         traceId,
-        modelName,
+        modelId, // Always use a specific model ID
         promptText,
         {
           operation: 'generate-final-answer',
+          model: modelId, // Duplicate to ensure it's available
           promptLength: prompt.length,
           learningsCount: learnings.length
         }
@@ -192,7 +180,11 @@ ${learningsString}
     }),
     operationName: 'generate-final-answer',
     traceId,
-    metadata: { promptLength: prompt.length, learningsCount: learnings.length }
+    metadata: {
+      model: modelId, // Explicitly include model in metadata
+      promptLength: prompt.length,
+      learningsCount: learnings.length
+    }
   });
 
   const result = await generateObject(aiParams);
@@ -209,6 +201,7 @@ ${learningsString}
         update: true,
         metadata: {
           answerGenerated: true,
+          answerModel: modelId,
           answerTokens: tokenUsage.totalTokens,
           answerLength: result.object.exactAnswer.length,
           answerGeneratedAt: new Date().toISOString()

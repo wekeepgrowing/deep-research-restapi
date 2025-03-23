@@ -13,7 +13,9 @@ import { Langfuse } from "langfuse";
 
 import { config } from '../config';
 
-// Initialize OpenTelemetry SDK with Langfuse exporter
+/**
+ * Initialize OpenTelemetry SDK with Langfuse exporter
+ */
 export const initializeTelemetry = () => {
   if (!config.telemetry.enabled) {
     return {
@@ -83,45 +85,437 @@ export const initializeTelemetry = () => {
 export const telemetry = initializeTelemetry();
 
 /**
- * Create a new trace for a research session
+ * TraceManager class for managing hierarchical traces and spans
  *
- * @param name Name of the trace for identification
- * @param metadata Additional metadata for the trace
- * @returns Trace ID and Langfuse trace object if telemetry is enabled
+ * This class simplifies the process of creating and managing connected
+ * traces, spans, and generations in a hierarchical structure.
  */
-export const createResearchTrace = (name: string, metadata?: Record<string, any>) => {
-  if (!telemetry.isEnabled || !telemetry.langfuse) {
-    return { traceId: uuidv4(), trace: null, isEnabled: false };
+export class TraceManager {
+  private traceId: string;
+  private sessionId?: string;
+  private userId?: string;
+  private activeSpans: Map<string, any> = new Map();
+  private defaultModel: string;
+  
+  /**
+   * Create a new TraceManager
+   *
+   * @param name Name of the root trace
+   * @param metadata Initial metadata for the trace
+   * @param sessionId Optional session ID for the trace
+   * @param userId Optional user ID for the trace
+   */
+  constructor(
+    private name: string,
+    private metadata: Record<string, any> = {},
+    sessionId?: string,
+    userId?: string
+  ) {
+    this.traceId = uuidv4();
+    this.sessionId = sessionId;
+    this.userId = userId;
+    this.defaultModel = config.openai.model;
+    
+    // Create root trace immediately
+    this.createRootTrace();
   }
-
-  try {
-    const traceId = uuidv4();
-    const trace = telemetry.langfuse.trace({
-      id: traceId,
-      name,
-      metadata: {
-        ...metadata,
-        startTime: new Date().toISOString(),
-        totalTokens: 0,
-        tokenUsage: []
-      },
-    });
-
-    return { traceId, trace, isEnabled: true };
-  } catch (error) {
-    console.error('Failed to create research trace:', error);
-    return { traceId: uuidv4(), trace: null, isEnabled: false };
+  
+  /**
+   * Create the root trace for this tracking session
+   *
+   * @returns The trace ID
+   */
+  private createRootTrace(): string {
+    if (!telemetry.isEnabled || !telemetry.langfuse) {
+      return this.traceId;
+    }
+    
+    try {
+      telemetry.langfuse.trace({
+        id: this.traceId,
+        name: this.name,
+        metadata: {
+          ...this.metadata,
+          startTime: new Date().toISOString(),
+          totalTokens: 0,
+          tokenUsage: []
+        },
+        sessionId: this.sessionId,
+        userId: this.userId
+      });
+      
+      return this.traceId;
+    } catch (error) {
+      console.error('Failed to create root trace:', error);
+      return this.traceId;
+    }
   }
+  
+  /**
+   * Get the trace ID for this manager
+   *
+   * @returns The trace ID
+   */
+  getTraceId(): string {
+    return this.traceId;
+  }
+  
+  /**
+   * Start a new span under the root trace
+   *
+   * @param name Name of the span
+   * @param metadata Additional metadata for the span
+   * @param parentSpanId Optional parent span ID, if not provided, uses the root trace
+   * @returns Span ID string
+   */
+  startSpan(
+    name: string,
+    metadata: Record<string, any> = {},
+    parentSpanId?: string
+  ): string {
+    if (!telemetry.isEnabled || !telemetry.langfuse) {
+      const spanId = uuidv4();
+      this.activeSpans.set(spanId, { name });
+      return spanId;
+    }
+    
+    try {
+      const spanId = uuidv4();
+      const span = telemetry.langfuse.span({
+        id: spanId,
+        name,
+        traceId: this.traceId,
+        parentObservationId: parentSpanId,
+        metadata: {
+          ...metadata,
+          startTime: new Date().toISOString(),
+        }
+      });
+      
+      this.activeSpans.set(spanId, span);
+      return spanId;
+    } catch (error) {
+      console.error(`Failed to start span "${name}":`, error);
+      const spanId = uuidv4();
+      this.activeSpans.set(spanId, { name });
+      return spanId;
+    }
+  }
+  
+  /**
+   * End a span with output data
+   *
+   * @param spanId ID of the span to end
+   * @param output Output data to add to the span
+   * @param metadata Additional metadata for the end event
+   * @returns True if successful
+   */
+  endSpan(
+    spanId: string,
+    output: any = null,
+    metadata: Record<string, any> = {}
+  ): boolean {
+    if (!telemetry.isEnabled || !telemetry.langfuse) {
+      this.activeSpans.delete(spanId);
+      return false;
+    }
+    
+    try {
+      const span = this.activeSpans.get(spanId);
+      if (!span) {
+        console.warn(`Attempted to end unknown span: ${spanId}`);
+        return false;
+      }
+      
+      span.end({
+        output,
+        metadata: {
+          ...metadata,
+          endTime: new Date().toISOString(),
+        }
+      });
+      
+      this.activeSpans.delete(spanId);
+      return true;
+    } catch (error) {
+      console.error(`Failed to end span ${spanId}:`, error);
+      this.activeSpans.delete(spanId);
+      return false;
+    }
+  }
+  
+  /**
+   * Create a generation for tracking LLM usage within a span
+   *
+   * @param spanId Parent span ID
+   * @param name Name of the generation
+   * @param model Model being used (IMPORTANT: Always specify to avoid undefined model)
+   * @param prompt Input prompt text
+   * @param metadata Additional metadata
+   * @returns Generation ID string
+   */
+  startGeneration(
+    spanId: string,
+    name: string,
+    model: string = this.defaultModel,
+    prompt: string,
+    metadata: Record<string, any> = {}
+  ): string {
+    if (!telemetry.isEnabled || !telemetry.langfuse) {
+      return uuidv4();
+    }
+    
+    try {
+      const genId = uuidv4();
+      const generation = telemetry.langfuse.generation({
+        id: genId,
+        name,
+        traceId: this.traceId,
+        parentObservationId: spanId,
+        model, // Explicitly set model
+        input: { prompt },
+        metadata: {
+          ...metadata,
+          modelId: model, // Duplicate to ensure it's available in metadata
+          startTime: new Date().toISOString(),
+        }
+      });
+      
+      return genId;
+    } catch (error) {
+      console.error(`Failed to start generation "${name}":`, error);
+      return uuidv4();
+    }
+  }
+  
+  /**
+   * Complete a generation with output and usage data
+   *
+   * @param generationId ID of the generation
+   * @param output Output data
+   * @param usage Token usage information
+   * @param metadata Additional metadata
+   * @returns True if successful
+   */
+  endGeneration(
+    generationId: string,
+    output: any,
+    usage: { promptTokens: number; completionTokens: number; totalTokens: number },
+    metadata: Record<string, any> = {}
+  ): boolean {
+    if (!telemetry.isEnabled || !telemetry.langfuse) {
+      return false;
+    }
+    
+    try {
+      telemetry.langfuse.generation({
+        id: generationId,
+        update: true,
+        output,
+        usage,
+        metadata: {
+          ...metadata,
+          endTime: new Date().toISOString(),
+        }
+      });
+      
+      // Update root trace with token usage
+      this.updateTraceTokenUsage(generationId, usage);
+      
+      return true;
+    } catch (error) {
+      console.error(`Failed to end generation ${generationId}:`, error);
+      return false;
+    }
+  }
+  
+  /**
+   * Update trace token usage information
+   *
+   * @param generationId Generation ID for reference
+   * @param usage Token usage data
+   */
+  private async updateTraceTokenUsage(
+    generationId: string,
+    usage: { promptTokens: number; completionTokens: number; totalTokens: number }
+  ): Promise<void> {
+    if (!telemetry.isEnabled || !telemetry.langfuse) {
+      return;
+    }
+    
+    try {
+      // Get current trace data
+      const traceData = await telemetry.langfuse.fetchTrace(this.traceId);
+      if (!traceData || !traceData.data) {
+        console.warn(`Could not fetch trace data for ${this.traceId}`);
+        return;
+      }
+      
+      // Update total tokens and token usage arrays
+      const currentMetadata = traceData.data.metadata || {};
+      const currentTotalTokens = currentMetadata.totalTokens || 0;
+      const currentTokenUsage = currentMetadata.tokenUsage || [];
+      
+      // Add new usage data
+      const newUsage = {
+        generationId,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Update trace
+      telemetry.langfuse.trace({
+        id: this.traceId,
+        update: true,
+        metadata: {
+          ...currentMetadata,
+          totalTokens: currentTotalTokens + usage.totalTokens,
+          tokenUsage: [...currentTokenUsage, newUsage]
+        }
+      });
+    } catch (error) {
+      console.error(`Failed to update trace token usage: ${error}`);
+    }
+  }
+  
+  /**
+   * Update trace metadata
+   *
+   * @param metadata Metadata to update or add
+   * @returns True if successful
+   */
+  async updateTraceMetadata(metadata: Record<string, any>): Promise<boolean> {
+    if (!telemetry.isEnabled || !telemetry.langfuse) {
+      return false;
+    }
+    
+    try {
+      // Get current trace data
+      const traceData = await telemetry.langfuse.fetchTrace(this.traceId);
+      if (!traceData || !traceData.data) {
+        console.warn(`Could not fetch trace data for ${this.traceId}`);
+        return false;
+      }
+      
+      // Merge metadata
+      const currentMetadata = traceData.data.metadata || {};
+      
+      // Update trace
+      telemetry.langfuse.trace({
+        id: this.traceId,
+        update: true,
+        metadata: {
+          ...currentMetadata,
+          ...metadata,
+          updatedAt: new Date().toISOString()
+        }
+      });
+      
+      return true;
+    } catch (error) {
+      console.error(`Failed to update trace metadata: ${error}`);
+      return false;
+    }
+  }
+  
+  /**
+   * Finish the trace by marking it as complete
+   *
+   * @param status Status of the trace (success, error)
+   * @param finalMetadata Final metadata for the trace
+   */
+  async finishTrace(
+    status: 'success' | 'error' = 'success',
+    finalMetadata: Record<string, any> = {}
+  ): Promise<void> {
+    // End any remaining active spans
+    for (const [spanId, span] of this.activeSpans.entries()) {
+      this.endSpan(spanId, null, { earlyTermination: true });
+    }
+    
+    if (!telemetry.isEnabled || !telemetry.langfuse) {
+      return;
+    }
+    
+    try {
+      telemetry.langfuse.trace({
+        id: this.traceId,
+        update: true,
+        status,
+        metadata: {
+          ...finalMetadata,
+          completedAt: new Date().toISOString()
+        }
+      });
+      
+      await telemetry.langfuse.flushAsync();
+    } catch (error) {
+      console.error(`Failed to finish trace: ${error}`);
+    }
+  }
+}
+
+/**
+ * Create a new trace manager for a research session
+ *
+ * @param name Name of the trace
+ * @param metadata Additional metadata for the trace
+ * @returns Trace manager and trace ID
+ */
+export const createResearchTraceManager = (
+  name: string,
+  metadata?: Record<string, any>,
+  sessionId?: string,
+  userId?: string
+): { traceManager: TraceManager; traceId: string } => {
+  const traceManager = new TraceManager(
+    name,
+    metadata,
+    sessionId,
+    userId
+  );
+  return {
+    traceManager,
+    traceId: traceManager.getTraceId()
+  };
 };
 
 /**
- * Create a Langfuse generation object for tracking AI interactions
+ * Get telemetry options for AI operations
  *
- * @param traceId Parent trace ID
- * @param model Model name
- * @param prompt Prompt text
- * @param metadata Additional metadata
- * @returns Generation object if telemetry is enabled
+ * @param operationName Name of the AI operation
+ * @param traceId Parent trace ID to link this operation to
+ * @param metadata Additional metadata for the operation
+ * @returns Telemetry configuration options
+ */
+export const getAITelemetryOptions = (
+  operationName: string,
+  traceId?: string,
+  metadata?: Record<string, any>
+) => {
+  if (!telemetry.isEnabled) {
+    return { isEnabled: false };
+  }
+
+  const functionId = `${operationName}-${uuidv4().slice(0, 8)}`;
+  
+  return {
+    isEnabled: true,
+    functionId,
+    recordInputs: true,
+    recordOutputs: true,
+    metadata: {
+      ...metadata,
+      operationId: functionId,
+      ...(traceId ? { langfuseTraceId: traceId, langfuseUpdateParent: true } : {}),
+    },
+  };
+};
+
+/**
+ * Create a generation directly (for backward compatibility)
  */
 export const createGeneration = (
   traceId: string,
@@ -141,6 +535,7 @@ export const createGeneration = (
       input: { prompt },
       metadata: {
         ...metadata,
+        modelId: model, // Ensure model ID is in metadata
         timestamp: new Date().toISOString(),
       },
     });
@@ -153,12 +548,7 @@ export const createGeneration = (
 };
 
 /**
- * Update a generation with completion information
- *
- * @param generation Langfuse generation object
- * @param output Output text
- * @param tokenUsage Token usage information
- * @returns Updated generation if successful
+ * Complete a generation (for backward compatibility)
  */
 export const completeGeneration = (
   generation: any,
@@ -184,91 +574,6 @@ export const completeGeneration = (
     console.error('Failed to complete generation:', error);
     return null;
   }
-};
-
-/**
- * Fetch trace metadata asynchronously
- *
- * @param traceId Trace ID to fetch
- * @returns Trace metadata or null if not found/error
- */
-export const fetchTraceMetadata = async (traceId: string): Promise<Record<string, any> | null> => {
-  if (!telemetry.isEnabled || !telemetry.langfuse) {
-    return null;
-  }
-
-  try {
-    const traceData = await telemetry.langfuse.fetchTrace(traceId);
-    return traceData?.data?.metadata || null;
-  } catch (error) {
-    console.error(`Error fetching trace metadata: ${error}`);
-    return null;
-  }
-};
-
-/**
- * Update trace metadata asynchronously
- *
- * @param traceId Trace ID to update
- * @param metadata Metadata to update
- * @returns Success status
- */
-export const updateTraceMetadata = async (
-  traceId: string,
-  metadata: Record<string, any>
-): Promise<boolean> => {
-  if (!telemetry.isEnabled || !telemetry.langfuse) {
-    return false;
-  }
-
-  try {
-    // Get current metadata
-    const currentMetadata = await fetchTraceMetadata(traceId);
-    
-    // Update trace with merged metadata
-    telemetry.langfuse.trace({
-      id: traceId,
-      update: true,
-      metadata: {
-        ...currentMetadata,
-        ...metadata,
-        updatedAt: new Date().toISOString()
-      }
-    });
-    
-    return true;
-  } catch (error) {
-    console.error(`Error updating trace metadata: ${error}`);
-    return false;
-  }
-};
-
-/**
- * Get telemetry options for AI operations
- *
- * @param operationName Name of the AI operation
- * @param traceId Parent trace ID to link this operation to
- * @param metadata Additional metadata for the operation
- * @returns Telemetry configuration options
- */
-export const getAITelemetryOptions = (operationName: string, traceId?: string, metadata?: Record<string, any>) => {
-  if (!telemetry.isEnabled) {
-    return { isEnabled: false };
-  }
-
-  const functionId = `${operationName}-${uuidv4().slice(0, 8)}`;
-  
-  return {
-    isEnabled: true,
-    functionId,
-    recordInputs: true,
-    recordOutputs: true,
-    metadata: {
-      ...metadata,
-      operationId: functionId,
-      ...(traceId ? { langfuseTraceId: traceId, langfuseUpdateParent: true } : {}),
-    },
-  };
 };
 
 /**
