@@ -417,4 +417,4 @@ app.get('/api/research/:jobId/action-plan', (req, res) => {
 // 서버 시작
 app.listen(PORT, () => {
   console.log(`Deep Research API server is running on port ${PORT}`);
-}); 
+});

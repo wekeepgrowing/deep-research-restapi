@@ -1,11 +1,27 @@
 import { createOpenAI, type OpenAIProviderSettings } from '@ai-sdk/openai';
 import { getEncoding } from 'js-tiktoken';
+import { LangfuseExporter } from "langfuse-vercel";
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
+
 
 import { RecursiveCharacterTextSplitter } from './text-splitter';
 
 interface CustomOpenAIProviderSettings extends OpenAIProviderSettings {
   baseURL?: string;
 }
+
+export const sdk = new NodeSDK({
+  traceExporter: new LangfuseExporter({ 
+    debug: true,
+    secretKey: process.env.LANGFUSE_SECRET_KEY || "",
+    publicKey: process.env.LANGFUSE_PUBLIC_KEY || "",
+    baseUrl: process.env.LANGFUSE_BASEURL || "",
+  }),
+  instrumentations: [getNodeAutoInstrumentations()],
+});
+ 
+sdk.start();
 
 // Providers
 const openai = createOpenAI({

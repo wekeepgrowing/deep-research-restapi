@@ -13,6 +13,7 @@ export async function generateNeededInfo({
   const result = await generateObject({
     model: o3MiniModel,
     system: systemPrompt(),
+    experimental_telemetry: { isEnabled: true },
     prompt: `
       The user wants to perform or implement the following request:
       <query>${query}</query>

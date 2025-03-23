@@ -54,6 +54,7 @@ async function generateSerpQueries({
   const res = await generateObject({
     model: o3MiniModel,
     system: systemPrompt(),
+    experimental_telemetry: { isEnabled: true },
     prompt: `Given the following user prompt, generate a list of SERP queries to gather the practical or technical information needed to implement or complete the user's task. Return up to ${numQueries} queries, each focusing on a different aspect of the task: 1) Potential methods or frameworks 2) Example case studies 3) Common pitfalls or best practices.
 
 User prompt:
@@ -121,6 +122,7 @@ export async function processSerpResult({
     model: o3MiniModel,
     abortSignal: AbortSignal.timeout(60_000),
     system: systemPrompt(),
+    experimental_telemetry: { isEnabled: true },
     prompt: `Given the following contents from a SERP search for the query <query>${query}</query>, generate a list of learnings from the contents. Return a maximum of ${numLearnings} learnings, but feel free to return less if the contents are clear. Make sure each learning is unique and not similar to each other. The learnings should be concise and to the point, as detailed and information dense as possible. Make sure to include any entities like people, places, companies, products, things, etc in the learnings, as well as any exact metrics, numbers, or dates. The learnings will be used to research the topic further.
 
 <contents>${contents
@@ -165,6 +167,7 @@ export async function writeFinalReport({
   const res = await generateObject({
     model: o3MiniModel,
     system: systemPrompt(),
+    experimental_telemetry: { isEnabled: true },
     prompt: `Given the following prompt from the user, write a final report on the topic using the learnings from research. Make it as detailed as possible, aim for 3 or more pages, include ALL the learnings from research:
 
 <prompt>${prompt}</prompt>
@@ -208,6 +211,7 @@ export async function writeFinalAnswer({
   const res = await generateObject({
     model: o3MiniModel,
     system: systemPrompt(),
+    experimental_telemetry: { isEnabled: true },
     prompt: `Given the following prompt from the user, write a final answer on the topic using the learnings from research. Follow the format specified in the prompt. Do not yap or babble or include any other text than the answer besides the format specified in the prompt. Keep the answer as concise as possible - usually it should be just a few words or maximum a sentence. Try to follow the format specified in the prompt (for example, if the prompt is using Latex, the answer should be in Latex. If the prompt gives multiple answer choices, the answer should be one of the choices).
 
 <prompt>${prompt}</prompt>
@@ -419,6 +423,7 @@ export async function writeActionPlan({
   const res = await generateObject({
     model: o3MiniModel,
     system: systemPrompt(),
+    experimental_telemetry: { isEnabled: true },
     prompt: `Given the following prompt and research learnings, create a detailed action plan. The action plan should provide actionable steps, outline implementation considerations, and list the sources of research.
 
 <prompt>${prompt}</prompt>
