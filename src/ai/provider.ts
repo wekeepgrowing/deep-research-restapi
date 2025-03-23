@@ -9,7 +9,7 @@ import { createOpenAI, type OpenAIProviderSettings } from '@ai-sdk/openai';
 import { getEncoding } from 'js-tiktoken';
 
 import { config } from '../config';
-import { telemetry, getAITelemetryOptions } from './telemetry';
+import { telemetry, getAITelemetryOptions, createGeneration, completeGeneration } from './telemetry';
 
 // Extend OpenAI provider settings to include custom base URL
 interface CustomOpenAIProviderSettings extends OpenAIProviderSettings {
@@ -33,6 +33,17 @@ const MinChunkSize = 140;
 const encoder = getEncoding('o200k_base');
 
 /**
+ * Count tokens in a text string
+ *
+ * @param text Text to count tokens for
+ * @returns Number of tokens
+ */
+export function countTokens(text: string): number {
+  if (!text) return 0;
+  return encoder.encode(text).length;
+}
+
+/**
  * Trim prompt to maximum context size
  *
  * @param prompt The text prompt to trim
@@ -47,7 +58,7 @@ export function trimPrompt(
     return '';
   }
 
-  const length = encoder.encode(prompt).length;
+  const length = countTokens(prompt);
   if (length <= contextSize) {
     return prompt;
   }
@@ -80,21 +91,139 @@ export function trimPrompt(
 }
 
 /**
+ * Calculate token usage for input and output
+ *
+ * @param prompt Input prompt text
+ * @param output Output text
+ * @returns Token usage information
+ */
+export function calculateTokenUsage(prompt: string, output: any) {
+  const promptTokens = countTokens(typeof prompt === 'string' ? prompt : JSON.stringify(prompt));
+  const outputText = typeof output === 'string' ? output : JSON.stringify(output);
+  const completionTokens = countTokens(outputText);
+  
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens
+  };
+}
+
+/**
  * Generate text with integrated telemetry
  * This is a wrapper around the AI SDK's generateText with added telemetry
  */
 export async function generateWithTelemetry(params: any) {
   // Extract trace info if available
-  const { traceId, operationName, metadata, ...aiParams } = params;
+  const { traceId, operationName, metadata, prompt, schema, ...aiParams } = params;
+  
+  // Calculate prompt token count
+  const promptText = prompt || '';
+  const promptTokenCount = countTokens(promptText);
   
   // Get telemetry options if traceId is provided
-  const telemetryOptions = traceId
-    ? getAITelemetryOptions(operationName || 'generate-text', traceId, metadata)
-    : { isEnabled: telemetry.isEnabled };
+  const telemetryOptions = getAITelemetryOptions(
+    operationName || 'generate-text',
+    traceId,
+    {
+      ...metadata,
+      promptTokens: promptTokenCount,
+      modelId: aiParams.model?.modelName || config.openai.model,
+      timestamp: new Date().toISOString(),
+    }
+  );
+
+  // Create Langfuse generation for detailed logging
+  const generation = traceId && telemetry.isEnabled && telemetry.langfuse
+    ? createGeneration(
+      traceId,
+      aiParams.model?.modelName || config.openai.model,
+      promptText,
+      {
+        operationName,
+        promptTokens: promptTokenCount,
+        ...metadata
+      }
+    )
+    : null;
 
   // Merge AI parameters with telemetry configuration
-  return {
+  const finalParams = {
     ...aiParams,
+    prompt: promptText,
+    ...(schema && { schema }),
     experimental_telemetry: telemetryOptions,
+  };
+
+  // Return the parameters object for use with the AI SDK
+  return {
+    ...finalParams,
+    // Add a postprocess function to handle the result
+    postprocess: async (result: any) => {
+      if (generation) {
+        try {
+          // Extract output based on result type
+          let output;
+          if (schema) {
+            output = result.object;
+          } else if (result.text) {
+            output = result.text;
+          } else {
+            output = result;
+          }
+
+          // Calculate token usage
+          const tokenUsage = calculateTokenUsage(promptText, output);
+          
+          // Update Langfuse with result and token usage
+          completeGeneration(generation, output, tokenUsage);
+          
+          // Update trace with token usage information
+          if (traceId && telemetry.isEnabled && telemetry.langfuse) {
+            try {
+              // Get existing trace data if available
+              let traceData;
+              try {
+                traceData = await telemetry.langfuse.fetchTrace(traceId);
+              } catch (fetchError) {
+                console.error(`Error fetching trace: ${fetchError}`);
+              }
+              
+              // Current total tokens in the trace
+              const currentTotalTokens = traceData?.data?.metadata?.totalTokens || 0;
+              
+              // Update trace with token usage
+              telemetry.langfuse.trace({
+                id: traceId,
+                update: true,
+                metadata: {
+                  totalTokens: currentTotalTokens + tokenUsage.totalTokens,
+                  tokenUsage: [
+                    ...(traceData?.data?.metadata?.tokenUsage || []),
+                    {
+                      operation: operationName,
+                      promptTokens: tokenUsage.promptTokens,
+                      completionTokens: tokenUsage.completionTokens,
+                      totalTokens: tokenUsage.totalTokens,
+                      timestamp: new Date().toISOString()
+                    }
+                  ]
+                }
+              });
+            } catch (updateError) {
+              console.error(`Error updating trace with token usage: ${updateError}`);
+            }
+          }
+          
+          // Log token usage for debugging
+          if (config.server.isDevelopment) {
+            console.log(`[Telemetry] Operation: ${operationName}, Token usage:`, tokenUsage);
+          }
+        } catch (error) {
+          console.error('Error in telemetry postprocessing:', error);
+        }
+      }
+      return result;
+    }
   };
 }

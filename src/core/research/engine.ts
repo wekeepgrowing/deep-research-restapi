@@ -11,9 +11,10 @@ import pLimit from 'p-limit';
 import { z } from 'zod';
 
 import { config } from '../../config';
-import { o3MiniModel, trimPrompt, generateWithTelemetry } from '../../ai/provider';
+import { o3MiniModel, trimPrompt, generateWithTelemetry, calculateTokenUsage } from '../../ai/provider';
 import { systemPrompt } from '../../prompt';
 import { OutputManager } from '../../utils/output-manager';
+import { createGeneration, completeGeneration, telemetry } from '../../ai/telemetry';
 import {
   ResearchProgress,
   ResearchResult,
@@ -45,10 +46,8 @@ export async function generateSerpQueries({
   learnings?: string[];
   traceId?: string;
 }): Promise<SerpQuery[]> {
-  const aiParams = await generateWithTelemetry({
-    model: o3MiniModel,
-    system: systemPrompt(),
-    prompt: `Given the following user prompt, generate a list of SERP queries to gather the practical or technical information needed to implement or complete the user's task. Return up to ${numQueries} queries, each focusing on a different aspect of the task: 1) Potential methods or frameworks 2) Example case studies 3) Common pitfalls or best practices.
+  // Prepare prompt
+  const promptText = `Given the following user prompt, generate a list of SERP queries to gather the practical or technical information needed to implement or complete the user's task. Return up to ${numQueries} queries, each focusing on a different aspect of the task: 1) Potential methods or frameworks 2) Example case studies 3) Common pitfalls or best practices.
 
 User prompt:
 <prompt>${query}</prompt>
@@ -59,7 +58,28 @@ ${
         '\n',
       )}`
     : ''
-}`,
+}`;
+
+  // Create specific generation for Langfuse tracing if enabled
+  const generation = traceId && telemetry.isEnabled && telemetry.langfuse
+    ? createGeneration(
+        traceId,
+        config.openai.model,
+        promptText,
+        {
+          operation: 'generate-serp-queries',
+          numQueries,
+          promptTokens: promptText.length,
+          learningsCount: learnings?.length || 0
+        }
+      )
+    : null;
+
+  // Prepare parameters with telemetry
+  const aiParams = await generateWithTelemetry({
+    model: o3MiniModel,
+    system: systemPrompt(),
+    prompt: promptText,
     schema: z.object({
       queries: z
         .array(
@@ -79,7 +99,15 @@ ${
     metadata: { query, numQueries, learningsCount: learnings?.length || 0 }
   });
 
+  // Generate the queries
   const result = await generateObject(aiParams);
+  
+  // Complete the generation with token usage information if available
+  if (generation) {
+    const tokenUsage = calculateTokenUsage(promptText, result.object);
+    completeGeneration(generation, result.object, tokenUsage);
+  }
+
   return result.object.queries.slice(0, numQueries);
 }
 
@@ -118,16 +146,33 @@ export async function processSerpResult({
   );
   log(`Ran "${query}", found ${contents.length} contents`);
 
-  // Generate learnings and follow-up questions from content
+  // Build the prompt
+  const promptText = `Given the following contents from a SERP search for the query <query>${query}</query>, generate a list of learnings from the contents. Return a maximum of ${numLearnings} learnings, but feel free to return less if the contents are clear. Make sure each learning is unique and not similar to each other. The learnings should be concise and to the point, as detailed and information dense as possible. Make sure to include any entities like people, places, companies, products, things, etc in the learnings, as well as any exact metrics, numbers, or dates. The learnings will be used to research the topic further.
+
+<contents>${contents
+      .map(content => `<content>\n${content}\n</content>`)
+      .join('\n')}</contents>`;
+  
+  // Create specific generation for Langfuse tracing if enabled
+  const generation = traceId && telemetry.isEnabled && telemetry.langfuse
+    ? createGeneration(
+        traceId,
+        config.openai.model,
+        promptText,
+        {
+          operation: 'process-serp-results',
+          query,
+          contentsCount: contents.length
+        }
+      )
+    : null;
+
+  // Prepare parameters with telemetry
   const aiParams = await generateWithTelemetry({
     model: o3MiniModel,
     abortSignal: AbortSignal.timeout(60_000),
     system: systemPrompt(),
-    prompt: `Given the following contents from a SERP search for the query <query>${query}</query>, generate a list of learnings from the contents. Return a maximum of ${numLearnings} learnings, but feel free to return less if the contents are clear. Make sure each learning is unique and not similar to each other. The learnings should be concise and to the point, as detailed and information dense as possible. Make sure to include any entities like people, places, companies, products, things, etc in the learnings, as well as any exact metrics, numbers, or dates. The learnings will be used to research the topic further.
-
-<contents>${contents
-      .map(content => `<content>\n${content}\n</content>`)
-      .join('\n')}</contents>`,
+    prompt: promptText,
     schema: z.object({
       learnings: z
         .array(z.string())
@@ -143,7 +188,15 @@ export async function processSerpResult({
     metadata: { query, contentsCount: contents.length }
   });
 
+  // Process the search results
   const result2 = await generateObject(aiParams);
+  
+  // Complete the generation with token usage information if available
+  if (generation) {
+    const tokenUsage = calculateTokenUsage(promptText, result2.object);
+    completeGeneration(generation, result2.object, tokenUsage);
+  }
+  
   log(`Created ${result2.object.learnings.length} learnings and ${result2.object.followUpQuestions.length} follow-up questions`);
 
   return result2.object;
@@ -200,10 +253,28 @@ export async function deepResearch({
   };
 
   // Helper to update and report progress
-  const reportProgress = (update: Partial<ResearchProgress>) => {
+  const reportProgress = async (update: Partial<ResearchProgress>) => {
     Object.assign(progress, update);
     onProgress?.(progress);
     localOutput.updateProgress(progress);
+    
+    // Update trace metadata if available
+    if (traceId && telemetry.isEnabled && telemetry.langfuse) {
+      try {
+        const trace = telemetry.langfuse.trace({
+          id: traceId,
+          update: true,
+          metadata: {
+            progress: {
+              ...progress,
+              updatedAt: new Date().toISOString()
+            }
+          }
+        });
+      } catch (error) {
+        log(`Error updating trace metadata: ${error}`);
+      }
+    }
   };
 
   // Generate SERP queries for this research step
@@ -216,7 +287,7 @@ export async function deepResearch({
   });
 
   // Update progress with query information
-  reportProgress({
+  await reportProgress({
     totalQueries: serpQueries.length,
     currentQuery: serpQueries[0]?.query,
   });
@@ -232,6 +303,26 @@ export async function deepResearch({
         try {
           log(`Processing query: "${serpQuery.query}" (Goal: ${serpQuery.researchGoal})`);
           
+          // Create a sub-trace for this query if parent trace exists
+          let queryTraceId = undefined;
+          if (traceId && telemetry.isEnabled && telemetry.langfuse) {
+            try {
+              const queryTrace = telemetry.langfuse.trace({
+                name: `query-${serpQuery.query.substring(0, 30)}`,
+                parentTraceId: traceId,
+                metadata: {
+                  query: serpQuery.query,
+                  researchGoal: serpQuery.researchGoal,
+                  depth: depth,
+                  breadth: breadth
+                }
+              });
+              queryTraceId = queryTrace.id;
+            } catch (error) {
+              log(`Error creating query sub-trace: ${error}`);
+            }
+          }
+          
           // Perform search with Firecrawl
           log(`Running Firecrawl search...`);
           const result = await firecrawl.search(serpQuery.query, {
@@ -242,6 +333,19 @@ export async function deepResearch({
           const newUrls = compact(result.data.map(item => item.url));
           log(`Found ${result.data.length} results, ${newUrls.length} unique URLs`);
 
+          // Update query trace with search results if available
+          if (queryTraceId && telemetry.isEnabled && telemetry.langfuse) {
+            telemetry.langfuse.trace({
+              id: queryTraceId,
+              update: true,
+              metadata: {
+                resultCount: result.data.length,
+                uniqueUrls: newUrls.length,
+                urls: newUrls
+              }
+            });
+          }
+
           // Process search results to extract learnings
           log(`Processing search results...`);
           const newResults = await processSerpResult({
@@ -250,7 +354,7 @@ export async function deepResearch({
             numLearnings: breadth,
             numFollowUpQuestions: breadth,
             output: localOutput,
-            traceId,
+            traceId: queryTraceId || traceId, // Use query trace if available
           });
 
           // Accumulate learnings and URLs
@@ -277,12 +381,26 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
 `.trim();
 
             // Update progress before recursive call
-            reportProgress({
+            await reportProgress({
               currentDepth: newDepth,
               currentBreadth: newBreadth,
               completedQueries: progress.completedQueries + 1,
               currentQuery: serpQuery.query,
             });
+
+            // Complete query trace before starting recursive research
+            if (queryTraceId && telemetry.isEnabled && telemetry.langfuse) {
+              telemetry.langfuse.trace({
+                id: queryTraceId,
+                update: true,
+                status: 'success',
+                metadata: {
+                  learnings: newResults.learnings,
+                  followUpQuestions: newResults.followUpQuestions,
+                  nextQuery: nextQuery
+                }
+              });
+            }
 
             // Recursively research with follow-up questions
             log(`Starting recursive research with new query: ${nextQuery.substring(0, 100)}...`);
@@ -299,11 +417,26 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
           } else {
             // No more depth or questions, return accumulated results
             log(`Reached maximum depth or no follow-up questions. Returning results.`);
-            reportProgress({
+            await reportProgress({
               currentDepth: 0,
               completedQueries: progress.completedQueries + 1,
               currentQuery: serpQuery.query,
             });
+            
+            // Complete query trace
+            if (queryTraceId && telemetry.isEnabled && telemetry.langfuse) {
+              telemetry.langfuse.trace({
+                id: queryTraceId,
+                update: true,
+                status: 'success',
+                metadata: {
+                  learnings: newResults.learnings,
+                  followUpQuestions: newResults.followUpQuestions,
+                  reachedMaxDepth: true
+                }
+              });
+            }
+            
             return {
               learnings: accumulatedLearnings,
               visitedUrls: accumulatedUrls,
@@ -317,6 +450,31 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
           } else {
             log(`Error running query: ${serpQuery.query}: `, e);
           }
+          
+          // Record error in trace if available
+          if (traceId && telemetry.isEnabled && telemetry.langfuse) {
+            try {
+              // Fetch current trace data to get existing errors
+              const traceData = await telemetry.langfuse.fetchTrace(traceId);
+              const existingErrors = traceData?.data?.metadata?.errors || [];
+              
+              // Update trace with new error
+              telemetry.langfuse.trace({
+                id: traceId,
+                update: true,
+                metadata: {
+                  errors: [...existingErrors, {
+                    query: serpQuery.query,
+                    error: e.message || String(e),
+                    timestamp: new Date().toISOString()
+                  }]
+                }
+              });
+            } catch (fetchError) {
+              log(`Error fetching/updating trace: ${fetchError}`);
+            }
+          }
+          
           return {
             learnings: [],
             visitedUrls: [],
@@ -338,6 +496,20 @@ ${newResults.followUpQuestions.map(q => `- ${q}`).join('\n')}
   log(`=== Deep Research Completed ===`);
   log(`Total Learnings: ${finalResult.learnings.length}`);
   log(`Total Visited URLs: ${finalResult.visitedUrls.length}`);
+  
+  // Update trace with final results
+  if (traceId && telemetry.isEnabled && telemetry.langfuse) {
+    telemetry.langfuse.trace({
+      id: traceId,
+      update: true,
+      status: 'success',
+      metadata: {
+        totalLearnings: finalResult.learnings.length,
+        totalVisitedUrls: finalResult.visitedUrls.length,
+        completedAt: new Date().toISOString()
+      }
+    });
+  }
   
   return finalResult;
 }
